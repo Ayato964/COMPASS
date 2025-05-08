@@ -58,6 +58,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private long loopStartTick = 0;
     private long loopEndTick = (long) ppqn * beatsPerMeasure * 4; // Default 4 measures loop
 
+    private boolean isDrawingWithPencil = false; // Shift + Drag でノートを描画するモード
+    private Note currentPencilDrawingNote = null; // 現在ペンシルで連続描画中のノート
     // --- Other ---
     private PianoRoll parentFrame; // To update info label
 
@@ -384,6 +386,9 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     // --- Mouse Events ---
     @Override
     public void mouseClicked(MouseEvent e) {
+        if (isDrawingWithPencil) { // ペンシル描画中はクリックイベントを無視
+            return;
+        }
         if (e.getButton() == MouseEvent.BUTTON1  && !isLongPress) {
             if (e.getX() < KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) { // Click on Piano Key
                 int pitch = yToPitch(e.getY());
@@ -392,7 +397,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                     System.out.println("Key clicked: " + pitch);
                 }
             } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) { // Click on Note Area
-                Optional<Note> clickedNoteOpt = clickedNoteOpt = getNoteAt(e.getX(), e.getY());
+                if (!e.isShiftDown()) {
+                    Optional<Note> clickedNoteOpt = getNoteAt(e.getX(), e.getY());
                 if (!clickedNoteOpt.isPresent()) { // Clicked on empty space, create note
                     int pitch = yToPitch(e.getY());
                     long startTime = snapToGrid(xToTick(e.getX()), 16); // Snap to 16th
@@ -408,6 +414,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                         }
                         repaint();
                     }
+                }
                 }
                 // Selection is handled in mousePressed for drag-ability
             } else if (e.getY() < RULER_HEIGHT && e.getX() >= KEY_WIDTH) { // Click on Ruler
@@ -429,98 +436,87 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         }
     }
 
+    // --- mouseReleased メソッドの修正 ---
+    @Override
+    public void mouseReleased(MouseEvent e) {
+        if (e.getButton() == MouseEvent.BUTTON1) {
+            if (isDrawingWithPencil) {
+                isDrawingWithPencil = false;
+                if (currentPencilDrawingNote != null) {
+                    selectedNote = currentPencilDrawingNote; // 最後に描画/延長したノートを選択
+                    if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
+                }
+                currentPencilDrawingNote = null; // リセット
+                repaint(); // 選択状態のハイライトのため
+                // 必要ならここで最後に描画されたノートを選択状態にするなど
+            } else if (currentDragMode != DragMode.NONE && selectedNote != null) {
+                if (currentDragMode == DragMode.MOVE) {
+                    selectedNote.setStartTimeTicks(snapToGrid(selectedNote.getStartTimeTicks(), 16));
+                } else if (currentDragMode == DragMode.RESIZE_END) {
+                    selectedNote.setDurationTicks(snapToGrid(selectedNote.getDurationTicks(), 16));
+                    if (selectedNote.getDurationTicks() < ppqn / 16) {
+                        selectedNote.setDurationTicks(ppqn / 16);
+                    }
+                }
+                if (selectedNote.getStartTimeTicks() + selectedNote.getDurationTicks() > totalTicks) {
+                    totalTicks = selectedNote.getStartTimeTicks() + selectedNote.getDurationTicks() + (long) ppqn * 4;
+                    updatePreferredSize();
+                }
+                if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
+                repaint();
+            }
+            currentDragMode = DragMode.NONE;
+            dragStartPoint = null;
+            dragNoteOriginal = null;
+//            repaint();
+        }
+    }
+
     @Override
     public void mousePressed(MouseEvent e) {
         if (e.getButton() == MouseEvent.BUTTON1) {
-            requestFocusInWindow(); // Important for key events if any
-            if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) { // Note Area
-                dragStartPoint = e.getPoint();
-                isLongPress = false;
-                longPressTimer.stop();
+            requestFocusInWindow();
+            dragStartPoint = e.getPoint(); // 常にドラッグ開始点を記録
+
+            if (e.isShiftDown() && e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+                // Shiftキーが押されていればペンシル描画モード
+                isDrawingWithPencil = true;
+                currentDragMode = DragMode.NONE; // 他のドラッグモードは無効化
+                selectedNote = null; // ペンシル中はノート選択を解除
+                if (parentFrame != null) parentFrame.updateNoteInfo(null);
+                currentPencilDrawingNote = null; // ★描画開始時にリセット
+                // 最初のノートを描画
+//                drawPencilNote(e.getX(), e.getY());
+                // 最初のノートの「核」を作成 (まだリストには追加しないか、仮追加してドラッグで更新)
+                startOrContinuePencilNote(e.getX(), e.getY());
+                repaint();
+
+            } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) { // 通常のノートエリア操作
+                isDrawingWithPencil = false; // ペンシル描画モードではない
                 Optional<Note> noteOpt = getNoteAt(e.getX(), e.getY());
                 if (noteOpt.isPresent()) {
                     selectedNote = noteOpt.get();
                     if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
-                    // Check if resizing
                     int noteEndX = tickToX(selectedNote.getStartTimeTicks() + selectedNote.getDurationTicks());
                     if (Math.abs(e.getX() - noteEndX) < resizeHandleSensitivity) {
                         currentDragMode = DragMode.RESIZE_END;
                     } else {
                         currentDragMode = DragMode.MOVE;
                     }
-                    // Store original state for snapping relative to start, or for undo
                     dragNoteOriginal = new Note(selectedNote.getPitch(), selectedNote.getStartTimeTicks(),
                             selectedNote.getDurationTicks(), selectedNote.getVelocity(), selectedNote.getChannel());
-                    // ★長押し判定タイマーを開始
-                    // ただし、リサイズハンドル上では長押しで音高変更モードにしない方が自然かもしれない
-                    if (currentDragMode != DragMode.RESIZE_END) { // リサイズ操作中は長押し音高変更を無効化
-                        longPressTimer.start();
-                    }
                 } else {
                     selectedNote = null;
                     if (parentFrame != null) parentFrame.updateNoteInfo(null);
-                    currentDragMode = DragMode.NONE; // Or implement marquee selection
+                    currentDragMode = DragMode.NONE;
                 }
                 repaint();
+            } else {
+                // 鍵盤エリアやルーラーエリアのクリックはここでは処理しない (mouseClickedで処理)
+                isDrawingWithPencil = false;
+                currentDragMode = DragMode.NONE;
             }
         }
-    }
-
-    @Override
-    public void mouseReleased(MouseEvent e) {
-        if (e.getButton() == MouseEvent.BUTTON1) {
-            if (currentDragMode != DragMode.NONE && selectedNote != null) {
-                // Final snap or adjustments
-                if (currentDragMode == DragMode.MOVE) {
-                    selectedNote.setStartTimeTicks(snapToGrid(selectedNote.getStartTimeTicks(), 16));
-                    // pitch already discrete
-                } else if (currentDragMode == DragMode.RESIZE_END) {
-                    selectedNote.setDurationTicks(snapToGrid(selectedNote.getDurationTicks(), 16));
-                    if (selectedNote.getDurationTicks() < ppqn / 16) { // Min duration
-                        selectedNote.setDurationTicks(ppqn/16);
-                    }
-                }
-                if (selectedNote.getStartTimeTicks() + selectedNote.getDurationTicks() > totalTicks) {
-                    totalTicks = selectedNote.getStartTimeTicks() + selectedNote.getDurationTicks() + (long)ppqn * 4;
-                    updatePreferredSize();
-                }
-                if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
-            }
-            currentDragMode = DragMode.NONE;
-            dragStartPoint = null;
-            dragNoteOriginal = null;
-            repaint();
-        }
-    }
-
-    @Override
-    public void mouseDragged(MouseEvent e) {
-        if (currentDragMode == DragMode.NONE || selectedNote == null || dragStartPoint == null || dragNoteOriginal == null) {
-            return;
-        }
-
-        int dx = e.getX() - dragStartPoint.x;
-        int dy = e.getY() - dragStartPoint.y;
-
-        if (currentDragMode == DragMode.MOVE) {
-            long newStartTime = xToTick(tickToX(dragNoteOriginal.getStartTimeTicks()) + dx);
-            int newPitch = yToPitch(pitchToY(dragNoteOriginal.getPitch()) + dy);
-
-            // Clamp pitch
-            if (newPitch < MIN_PITCH) newPitch = MIN_PITCH;
-            if (newPitch > MAX_PITCH) newPitch = MAX_PITCH;
-
-            if (newPitch != -1) selectedNote.setPitch(newPitch);
-            selectedNote.setStartTimeTicks(Math.max(0, newStartTime)); // Ensure non-negative start time
-
-        } else if (currentDragMode == DragMode.RESIZE_END) {
-            long originalEndTime = dragNoteOriginal.getStartTimeTicks() + dragNoteOriginal.getDurationTicks();
-            long newEndTime = xToTick(tickToX(originalEndTime) + dx);
-            long newDuration = newEndTime - selectedNote.getStartTimeTicks(); // Start time doesn't change on resize end
-            selectedNote.setDurationTicks(Math.max(ppqn / 16, newDuration)); // Min duration (e.g. 64th note)
-        }
-        if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
-        repaint();
     }
 
 
@@ -542,6 +538,100 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
             setCursor(Cursor.getDefaultCursor());
         }
     }
+
+    // --- mouseDragged メソッドの修正 ---
+    @Override
+    public void mouseDragged(MouseEvent e) {
+        if (isDrawingWithPencil) {
+            // ペンシル描画モードの場合
+            if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+                startOrContinuePencilNote(e.getX(), e.getY()); // ★ロジックを共通化
+                repaint();
+            }
+        } else if (currentDragMode != DragMode.NONE && selectedNote != null && dragStartPoint != null && dragNoteOriginal != null) {
+            // 通常のノート移動・リサイズモード
+            int dx = e.getX() - dragStartPoint.x;
+            int dy = e.getY() - dragStartPoint.y;
+
+            if (currentDragMode == DragMode.MOVE) {
+                long newStartTime = xToTick(tickToX(dragNoteOriginal.getStartTimeTicks()) + dx);
+                int newPitch = yToPitch(pitchToY(dragNoteOriginal.getPitch()) + dy);
+                if (newPitch < MIN_PITCH) newPitch = MIN_PITCH;
+                if (newPitch > MAX_PITCH) newPitch = MAX_PITCH;
+                if (newPitch != -1) selectedNote.setPitch(newPitch);
+                selectedNote.setStartTimeTicks(Math.max(0, newStartTime));
+            } else if (currentDragMode == DragMode.RESIZE_END) {
+                long originalEndTime = dragNoteOriginal.getStartTimeTicks() + dragNoteOriginal.getDurationTicks();
+                long newEndTime = xToTick(tickToX(originalEndTime) + dx);
+                long newDuration = newEndTime - selectedNote.getStartTimeTicks();
+                selectedNote.setDurationTicks(Math.max(ppqn / 16, newDuration));
+            }
+            if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
+            repaint();
+        }
+    }
+
+    // --- ★startOrContinuePencilNote メソッド (旧 drawPencilNote を大幅に変更) ---
+    private void startOrContinuePencilNote(int mouseX, int mouseY) {
+        int pitch = yToPitch(mouseY);
+        long currentTick = xToTick(mouseX); // マウスカーソル下のTick
+        // フリーハンド描画なので、グリッドに細かくスナップさせる (例: 32分音符)
+        // これが実質的なノートの最小単位の長さになる
+        long snapUnitTicks = ppqn / 8; // 32分音符 (ppqnが480なら60ticks) 好みで調整
+        long snappedCurrentTick = (currentTick / snapUnitTicks) * snapUnitTicks;
+
+        if (pitch == -1) { // 描画範囲外
+            // もし描画中ノートがあれば、それを確定（リストに追加済みなら何もしない）
+            currentPencilDrawingNote = null; // 連続描画を中断
+            return;
+        }
+
+        if (currentPencilDrawingNote == null) {
+            // --- 新しい連続描画の開始 ---
+            // 既に同じ位置にノートがないか軽くチェック (オプション)
+            for (Note n : notes) {
+                if (n.getPitch() == pitch && n.getStartTimeTicks() <= snappedCurrentTick &&
+                        snappedCurrentTick < n.getStartTimeTicks() + n.getDurationTicks()) {
+                    // マウス位置に既存ノートがあれば、新規描画はしない（既存ノートを選択する挙動にしても良い）
+                    // 今回はペンシルツールなので、上書き的に新しいノートを開始する
+                    // return; // 何もせず抜ける場合
+                }
+            }
+
+            currentPencilDrawingNote = new Note(pitch, snappedCurrentTick, snapUnitTicks, 100, 0);
+            notes.add(currentPencilDrawingNote); // 新しいノートをリストに追加
+            if (currentPencilDrawingNote.getStartTimeTicks() + currentPencilDrawingNote.getDurationTicks() > totalTicks) {
+                totalTicks = currentPencilDrawingNote.getStartTimeTicks() + currentPencilDrawingNote.getDurationTicks() + (long) ppqn * 4;
+                updatePreferredSize();
+            }
+        } else {
+            // --- 既存の連続描画を継続または変更 ---
+            if (currentPencilDrawingNote.getPitch() == pitch &&
+                    snappedCurrentTick >= currentPencilDrawingNote.getStartTimeTicks()) {
+                // 音高が同じで、時間が進んでいる (または同じ開始ティックだが延長の可能性)
+                long newDuration = snappedCurrentTick - currentPencilDrawingNote.getStartTimeTicks() + snapUnitTicks;
+                if (newDuration > 0) {
+                    currentPencilDrawingNote.setDurationTicks(newDuration);
+                    if (currentPencilDrawingNote.getStartTimeTicks() + currentPencilDrawingNote.getDurationTicks() > totalTicks) {
+                        totalTicks = currentPencilDrawingNote.getStartTimeTicks() + currentPencilDrawingNote.getDurationTicks() + (long) ppqn * 4;
+                        updatePreferredSize();
+                    }
+                } else {
+                    // 時間が戻った場合などは、新しいノートとして開始 (前のノートは確定)
+                    currentPencilDrawingNote = null; // 前のノートを終了
+                    startOrContinuePencilNote(mouseX, mouseY); // 再帰的に新しいノートとして開始
+                    return;
+                }
+            } else {
+                // 音高が変わった、または時間が不連続 (前に戻ったなど)
+                // 現在の currentPencilDrawingNote は確定（リストには既に追加されている）
+                currentPencilDrawingNote = null; // 前のノートの連続描画を終了
+                startOrContinuePencilNote(mouseX, mouseY); // 新しい位置で再度描画開始を試みる
+                return;
+            }
+        }
+    }
+
 
     @Override
     public void mouseEntered(MouseEvent e) {}
