@@ -159,11 +159,23 @@ public class PianoRoll extends JFrame {
 
         JMenuItem openItem = new JMenuItem("Open MIDI...");
         openItem.addActionListener(e -> openMidiFile());
+        // (オプション) Openのショートカット (例: Ctrl+O / Cmd+O)
+        openItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O,
+                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
         fileMenu.add(openItem);
 
-        JMenuItem saveItem = new JMenuItem("Save MIDI As...");
-        saveItem.addActionListener(e -> saveMidiFile());
+        // --- ★「Save MIDI」メニューアイテムの追加 ---
+        JMenuItem saveItem = new JMenuItem("Save MIDI");
+        saveItem.addActionListener(e -> saveCurrentMidiFile());
+        // Ctrl+S (Windows/Linux) または Command+S (macOS) をショートカットに設定
+        saveItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
+                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
         fileMenu.add(saveItem);
+        // --- ここまで追加 ---
+
+        JMenuItem saveAsItem = new JMenuItem("Save MIDI As...");
+        saveAsItem.addActionListener(e -> saveMidiFileAs()); // ★★★ 正しくは saveAsItem にリスナーを設定 ★★★
+        fileMenu.add(saveAsItem);
 
         fileMenu.addSeparator();
         JMenuItem exitItem = new JMenuItem("Exit");
@@ -185,32 +197,46 @@ public class PianoRoll extends JFrame {
                 pianoRollView.loadNotes(midiData.notes, midiData.ppqn, midiData.totalTicks);
                 playbackManager.loadNotes(midiData.notes, midiData.ppqn); // Also load into playback
                 setTitle("Java Piano Roll - " + file.getName());
+                currentFile = file; // ★開いたファイルを記憶
             } catch (InvalidMidiDataException | IOException ex) {
                 JOptionPane.showMessageDialog(this, "Error opening MIDI file: " + ex.getMessage(),
                         "File Error", JOptionPane.ERROR_MESSAGE);
                 ex.printStackTrace();
+                currentFile = null; // ★エラー時はクリア
             }
         }
     }
 
-    private void saveMidiFile() {
+    // ★「Save As」の処理を行うメソッド (旧 saveMidiFile)
+    private void saveMidiFileAs() {
         if (playbackManager.isPlaying()) playbackManager.stop();
         playButton.setText("Play");
 
         if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
-            // Ensure .mid extension
             if (!file.getName().toLowerCase().endsWith(".mid") && !file.getName().toLowerCase().endsWith(".midi")) {
                 file = new File(file.getParentFile(), file.getName() + ".mid");
             }
+            // ファイル上書き確認 (JFileChooserが自動でやってくれる場合もあるが、念のため)
+            if (file.exists()) {
+                int response = JOptionPane.showConfirmDialog(this,
+                        "File \"" + file.getName() + "\" already exists. Do you want to replace it?",
+                        "Confirm Save As", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (response != JOptionPane.YES_OPTION) {
+                    return; // 上書きしない場合は処理を中断
+                }
+            }
+
             try {
                 MidiHandler.saveMidiFile(file, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
                 setTitle("Java Piano Roll - " + file.getName());
-                JOptionPane.showMessageDialog(this, "MIDI file saved successfully!", "Save Successful", JOptionPane.INFORMATION_MESSAGE);
+                currentFile = file; // ★保存したファイルを記憶
+                JOptionPane.showMessageDialog(this, "MIDI file saved successfully as " + file.getName(), "Save Successful", JOptionPane.INFORMATION_MESSAGE);
             } catch (InvalidMidiDataException | IOException ex) {
                 JOptionPane.showMessageDialog(this, "Error saving MIDI file: " + ex.getMessage(),
                         "File Error", JOptionPane.ERROR_MESSAGE);
                 ex.printStackTrace();
+                // currentFile はここでは変更しない（Save As失敗なので前の状態を維持）
             }
         }
     }
@@ -226,6 +252,28 @@ public class PianoRoll extends JFrame {
             ));
         } else {
             infoLabel.setText("No note selected. Click to create or select.");
+        }
+    }
+
+    // ★現在のファイルに上書き保存するメソッド (Ctrl+Sで呼び出される)
+    private void saveCurrentMidiFile() {
+        if (playbackManager.isPlaying()) playbackManager.stop();
+        playButton.setText("Play");
+
+        if (currentFile != null) { // 既にファイルが開かれているか、一度「Save As」されている場合
+            try {
+                MidiHandler.saveMidiFile(currentFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+                // タイトルは既に設定されているはずなので、変更は任意
+                // setTitle("Java Piano Roll - " + currentFile.getName()); // 必要なら
+                JOptionPane.showMessageDialog(this, "MIDI file saved successfully to " + currentFile.getName(), "Save Successful", JOptionPane.INFORMATION_MESSAGE);
+            } catch (InvalidMidiDataException | IOException ex) {
+                JOptionPane.showMessageDialog(this, "Error saving MIDI file: " + ex.getMessage(),
+                        "File Error", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        } else {
+            // currentFile が null の場合は、まだ一度も保存されていないので「Save As」を実行
+            saveMidiFileAs();
         }
     }
 

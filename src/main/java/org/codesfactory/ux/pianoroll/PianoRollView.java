@@ -6,9 +6,11 @@ import java.awt.event.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-
-public class PianoRollView extends JPanel implements MouseListener, MouseMotionListener, MouseWheelListener {
-
+// import文に以下を追加
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyListener; // KeyListener をインポート
+// クラス宣言を修正
+public class PianoRollView extends JPanel implements MouseListener, MouseMotionListener, MouseWheelListener, KeyListener { // KeyListener を実装
     // --- Constants ---
     public static final int MIN_PITCH = 0;
     public static final int MAX_PITCH = 127;
@@ -38,6 +40,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private List<Note> notes = new ArrayList<>();
     private long totalTicks = (long) ppqn * beatsPerMeasure * 16; // Default 16 measures
 
+    // --- タブ上部のメモリを明示するフラグ ---
+    public static final Color LOOP_MARKER_COLOR = new Color(0,0,0); // ループ範囲の背景色より少し濃い色
     // --- Selection & Interaction ---
     private Note selectedNote = null;
     private Point dragStartPoint = null;
@@ -61,13 +65,63 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private boolean isDrawingWithPencil = false; // Shift + Drag でノートを描画するモード
     private Note currentPencilDrawingNote = null; // 現在ペンシルで連続描画中のノート
     // --- Other ---
-    private PianoRoll parentFrame; // To update info label
+    private PianoRoll parentFrame; // To update info labe
+
+    //--delete-marker--// l
+    private boolean isMarqueeSelecting = false;
+    private Rectangle marqueeRect = null;
+    private Point marqueeStartPoint = null;
+    // ★重要: 複数選択に対応する場合、selectedNote を List<Note> に変更する必要がある
+    private List<Note> selectedNotesList = new ArrayList<>(); // 仮: 複数選択されたノートを保持
+
+    // --- ★ KeyListener の実装 ---
+    @Override
+    public void keyTyped(KeyEvent e) {
+        // 通常は使用しない
+    }
+
+    @Override
+    public void keyPressed(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_DELETE || e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
+            boolean notesWereDeleted = false;
+            if (!selectedNotesList.isEmpty()) { // ★複数選択リストを優先
+                // (オプション) Undoのために削除するノートのリストを保存
+                // List<Note> deletedNotesBackup = new ArrayList<>(selectedNotesList);
+                notes.removeAll(selectedNotesList);
+                selectedNotesList.clear();
+                notesWereDeleted = true;
+                System.out.println("Deleted multiple selected notes.");
+            } else if (selectedNote != null) { // 単一選択の場合
+                // (オプション) Undoのために削除するノートを保存
+                // Note deletedNoteBackup = selectedNote;
+                notes.remove(selectedNote);
+                selectedNote = null;
+                notesWereDeleted = true;
+                System.out.println("Deleted single selected note.");
+            }
+
+            if (notesWereDeleted) {
+                if (parentFrame != null) {
+                    parentFrame.updateNoteInfo(null);
+                }
+                repaint();
+            }
+        }
+    }
+
+    @Override
+    public void keyReleased(KeyEvent e) {
+        // 通常は使用しない
+    }
+    // --- ★ここまで追加 ---
 
     public PianoRollView(PianoRoll parent) {
         this.parentFrame = parent;
         addMouseListener(this);
         addMouseMotionListener(this);
         addMouseWheelListener(this);
+        addKeyListener(this); // ★ KeyListener を登録
+        setFocusable(true);   // ★ キーイベントを受け取るためにフォーカス可能にする
         setBackground(DARK_BACKGROUND_COLOR);
         updatePreferredSize();
         // 長押し判定タイマーの初期化
@@ -168,6 +222,45 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         drawNotes(g2d, clip);
         drawControllerLane(g2d, clip); // Basic controller lane
         drawPlaybackHead(g2d, clip);
+
+        if (isMarqueeSelecting && marqueeRect != null) {
+            g2d.setColor(new Color(0, 100, 255, 50)); // 半透明の青
+            g2d.fill(marqueeRect);
+            g2d.setColor(new Color(0, 100, 255)); // 枠線
+            g2d.draw(marqueeRect);
+        }
+    }
+
+    // --- マーキー範囲内のノートを選択するメソッド (新規) ---
+    private void selectNotesInMarquee() {
+        selectedNotesList.clear(); // まずクリア
+        selectedNote = null; // 単一選択もクリア
+
+        if (marqueeRect == null) return;
+
+        for (Note note : notes) {
+            int noteX = tickToX(note.getStartTimeTicks());
+            int noteY = pitchToY(note.getPitch());
+            int noteWidth = (int) (note.getDurationTicks() * pixelsPerTick);
+            int noteActualHeight = this.noteHeight; // Note: noteHeightは1音の高さなので、実際の描画高はこれ
+
+            Rectangle noteBounds = new Rectangle(noteX, noteY, Math.max(1,noteWidth), Math.max(1,noteActualHeight));
+
+            // marqueeRect と noteBounds が交差するかどうかで判定
+            if (marqueeRect.intersects(noteBounds)) {
+                selectedNotesList.add(note);
+            }
+        }
+        System.out.println("Marquee selected " + selectedNotesList.size() + " notes."); // デバッグ用
+        // ★重要: 複数選択されたノートの描画方法 (ハイライトなど) を drawNotes で対応する必要がある
+        // ★重要: 情報ラベルの更新も複数選択に対応する必要がある
+        if (parentFrame != null && !selectedNotesList.isEmpty()) {
+            // 複数の場合は代表的な情報を表示するか、「Multiple notes selected」などと表示
+            parentFrame.updateNoteInfo(selectedNotesList.get(0)); // とりあえず最初のノート情報
+        } else if (parentFrame != null) {
+            parentFrame.updateNoteInfo(null);
+        }
+        repaint();
     }
 
     private void drawRuler(Graphics2D g2d, Rectangle clip) {
@@ -180,27 +273,79 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         g2d.setFont(new Font("Arial", Font.PLAIN, 10));
         int ticksPerMeasure = ppqn * beatsPerMeasure;
 
-        long startTick = Math.max(0, xToTick(clip.x - KEY_WIDTH));
-        long endTick = xToTick(clip.x + clip.width - KEY_WIDTH) + ticksPerMeasure;
-        endTick = Math.min(endTick, totalTicks);
+        long startTickRuler = Math.max(0, xToTick(clip.x - KEY_WIDTH));
+        long endTickRuler = xToTick(clip.x + clip.width - KEY_WIDTH) + ticksPerMeasure; // ルーラー描画終了Tick
+        endTickRuler = Math.min(endTickRuler, totalTicks);
+        // 小節線と拍線の描画 (既存のロジック)
+        for (long currentTick = 0; currentTick <= endTickRuler; currentTick += ppqn / 4) {
+            if (currentTick < startTickRuler && currentTick + ppqn / 4 < startTickRuler) continue; // 描画範囲より前ならスキップ
 
+            int x = tickToX(currentTick);
+            if (x < KEY_WIDTH) continue; // 鍵盤エリアより左は描画しない
 
-        for (long currentTick = 0; currentTick <= endTick; currentTick += ppqn / 4) { // Check every 16th for measure/beat lines
-            if (currentTick % ticksPerMeasure == 0) { // Measure line
-                int x = tickToX(currentTick);
-                if (x >= KEY_WIDTH && x >= clip.x && x <= clip.x + clip.width) {
+            if (x >= clip.x && x <= clip.x + clip.width) { // クリップ範囲内のみ描画
+                if (currentTick % ticksPerMeasure == 0) { // Measure line
                     g2d.setColor(Color.WHITE);
                     g2d.drawLine(x, RULER_HEIGHT - 10, x, RULER_HEIGHT);
                     g2d.drawString(String.valueOf(currentTick / ticksPerMeasure + 1), x + 2, RULER_HEIGHT - 12);
+                } else if (currentTick % ppqn == 0) { // Beat line (assuming ppqn is a quarter note)
+                    if (pixelsPerTick * ppqn > 10) { // ある程度スペースがある場合のみ拍線を描画
+                        g2d.setColor(Color.LIGHT_GRAY);
+                        g2d.drawLine(x, RULER_HEIGHT - 5, x, RULER_HEIGHT);
+                    }
                 }
-            } else if (currentTick % ppqn == 0) { // Beat line (assuming ppqn is a quarter note)
-                int x = tickToX(currentTick);
-                if (x >= KEY_WIDTH && x >= clip.x && x <= clip.x + clip.width && pixelsPerTick * ppqn > 10) {
-                    g2d.setColor(Color.LIGHT_GRAY);
-                    g2d.drawLine(x, RULER_HEIGHT - 5, x, RULER_HEIGHT);
+                // (オプション) さらに細かいグリッド線 (16分音符など) をルーラーに描画する場合
+                // else if (pixelsPerTick * (ppqn / 4.0) > 5) {
+                //     g2d.setColor(Color.GRAY);
+                //     g2d.drawLine(x, RULER_HEIGHT - 3, x, RULER_HEIGHT);
+                // }
+            }
+        }
+
+        // --- ★ループ範囲フラグ（マーカー）の描画 ---
+        if (showLoopRange) {
+            int startMarkerX = tickToX(loopStartTick);
+            int endMarkerX = tickToX(loopEndTick);
+            g2d.setColor(LOOP_MARKER_COLOR); // マーカーの色
+
+            // 開始マーカー (下向き三角形)
+            if (startMarkerX >= KEY_WIDTH && startMarkerX >= clip.x && startMarkerX <= clip.x + clip.width) {
+                Polygon startTriangle = new Polygon();
+                startTriangle.addPoint(startMarkerX, 0); // 上の頂点
+                startTriangle.addPoint(startMarkerX - 4, 15); // 左下の頂点
+                startTriangle.addPoint(startMarkerX + 4, 15); // 右下の頂点
+                g2d.fillPolygon(startTriangle);
+                // マーカーの下に縦線を引いても良い
+                // g2d.drawLine(startMarkerX, 6, startMarkerX, RULER_HEIGHT -1);
+            }
+
+            // 終了マーカー (下向き三角形)
+            if (endMarkerX >= KEY_WIDTH && endMarkerX >= clip.x && endMarkerX <= clip.x + clip.width) {
+                Polygon endTriangle = new Polygon();
+                endTriangle.addPoint(endMarkerX, 0);   // 上の頂点
+                endTriangle.addPoint(endMarkerX - 4, 15); // 左下の頂点
+                endTriangle.addPoint(endMarkerX + 4, 15); // 右下の頂点
+                g2d.fillPolygon(endTriangle);
+                // マーカーの下に縦線を引いても良い
+                // g2d.drawLine(endMarkerX, 6, endMarkerX, RULER_HEIGHT -1);
+            }
+
+            // ループ範囲を示すルーラー上の背景色 (オプション、ノートエリアの背景とは別に)
+            if (startMarkerX < endMarkerX) {
+                int rectX = Math.max(KEY_WIDTH, startMarkerX); // 鍵盤エリアより左にはみ出ないように
+                int rectWidth = endMarkerX - rectX;
+                if (rectX + rectWidth > KEY_WIDTH) { // 幅が0以上で、鍵盤エリア内にある場合
+                    // クリップ範囲との交差部分のみ描画
+                    Rectangle loopRulerRect = new Rectangle(rectX, 0, rectWidth, RULER_HEIGHT -1);
+                    Rectangle clippedLoopRulerRect = loopRulerRect.intersection(clip);
+                    if (!clippedLoopRulerRect.isEmpty()) {
+                        g2d.setColor(new Color(LOOP_RANGE_COLOR.getRed(), LOOP_RANGE_COLOR.getGreen(), LOOP_RANGE_COLOR.getBlue(), 30)); // 少し薄い色で
+                        g2d.fillRect(clippedLoopRulerRect.x, clippedLoopRulerRect.y, clippedLoopRulerRect.width, clippedLoopRulerRect.height);
+                    }
                 }
             }
         }
+        // --- ★ここまで追加 ---
     }
 
     private void drawPianoKeys(Graphics2D g2d, Rectangle clip) {
@@ -280,7 +425,16 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
             Rectangle noteRect = new Rectangle(x, y, Math.max(1, width), Math.max(1,height)); // Min width/height 1px
             if (clip.intersects(noteRect)) {
-                if (note == selectedNote) {
+                boolean isSelected = false;
+                if (!selectedNotesList.isEmpty()) { // ★複数選択リストが空でない場合
+                    if (selectedNotesList.contains(note)) {
+                        isSelected = true;
+                    }
+                } else if (note == selectedNote) { // ★単一選択の場合 (複数選択リストが空の場合のみ評価)
+                    isSelected = true;
+                }
+
+                if (isSelected) {
                     g2d.setColor(SELECTED_NOTE_COLOR);
                     g2d.fillRect(x, y, width, height);
                     g2d.setColor(SELECTED_NOTE_BORDER_COLOR);
@@ -439,6 +593,14 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     // --- mouseReleased メソッドの修正 ---
     @Override
     public void mouseReleased(MouseEvent e) {
+        if (isMarqueeSelecting) {
+            isMarqueeSelecting = false;
+            if (marqueeRect != null && marqueeRect.width > 0 && marqueeRect.height > 0) {
+                selectNotesInMarquee(); // マーキー範囲内のノートを選択するメソッド呼び出し
+            }
+            marqueeRect = null; // 選択矩形をクリア
+            repaint();
+        }
         if (e.getButton() == MouseEvent.BUTTON1) {
             if (isDrawingWithPencil) {
                 isDrawingWithPencil = false;
@@ -471,6 +633,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 //            repaint();
         }
     }
+
+
 
     @Override
     public void mousePressed(MouseEvent e) {
@@ -517,6 +681,18 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 currentDragMode = DragMode.NONE;
             }
         }
+
+        if (!isDrawingWithPencil && currentDragMode == DragMode.NONE && selectedNote == null &&
+                e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+            // ノートがない場所でクリックされた場合、マーキー選択を開始
+            isMarqueeSelecting = true;
+            marqueeStartPoint = e.getPoint();
+            marqueeRect = new Rectangle(marqueeStartPoint);
+            selectedNotesList.clear(); // 以前の複数選択をクリア (単一選択のselectedNoteもnullに)
+            selectedNote = null;
+            if (parentFrame != null) parentFrame.updateNoteInfo(null);
+            repaint();
+        }
     }
 
 
@@ -542,7 +718,16 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     // --- mouseDragged メソッドの修正 ---
     @Override
     public void mouseDragged(MouseEvent e) {
-        if (isDrawingWithPencil) {
+        if (isMarqueeSelecting) {
+            marqueeRect.setBounds(
+                    Math.min(marqueeStartPoint.x, e.getX()),
+                    Math.min(marqueeStartPoint.y, e.getY()),
+                    Math.abs(e.getX() - marqueeStartPoint.x),
+                    Math.abs(e.getY() - marqueeStartPoint.y)
+            );
+            // (オプション) marqueeRectと交差するノートをリアルタイムでハイライトするならここで処理
+            repaint();
+        }else if (isDrawingWithPencil) {
             // ペンシル描画モードの場合
             if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 startOrContinuePencilNote(e.getX(), e.getY()); // ★ロジックを共通化
