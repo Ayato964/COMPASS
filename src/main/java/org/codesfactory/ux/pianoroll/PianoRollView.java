@@ -1,4 +1,5 @@
 package org.codesfactory.ux.pianoroll;
+import org.codesfactory.ux.pianoroll.commands.UndoManager;
 
 import javax.swing.*;
 import java.awt.*;
@@ -9,6 +10,15 @@ import java.util.Optional;
 // import文に以下を追加
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener; // KeyListener をインポート
+
+// ★★★ コマンド関連クラスのインポート ★★★
+import org.codesfactory.ux.pianoroll.commands.Command; // (UndoManager が使うので直接は不要かもだが念のため)
+import org.codesfactory.ux.pianoroll.commands.AddNoteCommand;
+import org.codesfactory.ux.pianoroll.commands.DeleteNoteCommand; // (もし使うなら)
+import org.codesfactory.ux.pianoroll.commands.MoveNoteCommand;   // (もし使うなら)
+import org.codesfactory.ux.pianoroll.commands.ResizeNoteCommand;
+import org.codesfactory.ux.pianoroll.commands.UndoManager;
+
 // クラス宣言を修正
 public class PianoRollView extends JPanel implements MouseListener, MouseMotionListener, MouseWheelListener, KeyListener { // KeyListener を実装
     // --- Constants ---
@@ -74,6 +84,10 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     // ★重要: 複数選択に対応する場合、selectedNote を List<Note> に変更する必要がある
     private List<Note> selectedNotesList = new ArrayList<>(); // 仮: 複数選択されたノートを保持
 
+
+    //--UNOD--
+    private UndoManager undoManager; // ★ UndoManager を追加
+
     // --- ★ KeyListener の実装 ---
     @Override
     public void keyTyped(KeyEvent e) {
@@ -94,8 +108,11 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
             } else if (selectedNote != null) { // 単一選択の場合
                 // (オプション) Undoのために削除するノートを保存
                 // Note deletedNoteBackup = selectedNote;
-                notes.remove(selectedNote);
+                DeleteNoteCommand deleteCmd = new DeleteNoteCommand(this, this.notes, selectedNote);
+                undoManager.executeCommand(deleteCmd);
                 selectedNote = null;
+                notes.remove(selectedNote);
+                if (parentFrame != null) parentFrame.updateNoteInfo(null);
                 notesWereDeleted = true;
                 System.out.println("Deleted single selected note.");
             }
@@ -117,6 +134,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     public PianoRollView(PianoRoll parent) {
         this.parentFrame = parent;
+        this.undoManager = new UndoManager(this); // ★ 初期化
         addMouseListener(this);
         addMouseMotionListener(this);
         addMouseWheelListener(this);
@@ -136,7 +154,66 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         });
         longPressTimer.setRepeats(false);
     }
+
+    public UndoManager getUndoManager() {
+        return this.undoManager;
+    }
+
+    public PianoRoll getParentFrame() { // これはUndoManagerから使われる
+        return this.parentFrame;
+    }
+
+    // (オプション) pixelsPerTickが0や負にならないように安全なゲッターを追加
+    public double getPixelsPerTickSafe() {
+        return Math.max(0.001, pixelsPerTick); // 最小値を保証
+    }
+
+    public void deleteAllNotes() {
+        if (!notes.isEmpty()) {
+            // (オプション) Undoのために削除するノートのリストを保存する場合、
+            // このメソッドを呼び出す前に DeleteAllNotesCommand のようなものを作成し、
+            // そこで notes リストのコピーを保持しておく必要があります。
+            // このメソッド自体は単純にリストをクリアするだけになります。
+
+            notes.clear(); // notes リストの全要素を削除
+            selectedNote = null; // 単一選択をクリア
+            selectedNotesList.clear(); // 複数選択リストもクリア
+
+            if (parentFrame != null) {
+                parentFrame.updateNoteInfo(null); // 親フレームの情報表示を更新
+            }
+            System.out.println("All notes deleted from view."); // デバッグ用
+            repaint(); // 画面を再描画して変更を反映
+        }
+    }
+
+    // (オプション) "Delete All Notes" コマンドを記録するメソッド
+    public void deleteAllNotesAndRecordCommand() {
+        if (!notes.isEmpty()) {
+            // DeleteAllNotesCommandのようなものを作成してUndoManagerに渡す
+            // 例: DeleteMultipleNotesCommand を流用
+            // DeleteMultipleNotesCommand command = new DeleteMultipleNotesCommand(this, notes, new ArrayList<>(notes));
+            // undoManager.executeCommand(command);
+            // notes.clear(); // コマンドのexecuteで行う
+            // selectedNote = null;
+            // selectedNotesList.clear();
+            // if (parentFrame != null) parentFrame.updateNoteInfo(null);
+            // repaint(); // UndoManagerが行う
+
+            // 現状の deleteAllNotes を直接呼び、後処理はUndoManagerに任せる場合
+            // ただし、これだとUndoのための情報はUndoManager側では取れない
+            // 正しくは、deleteAllNotes の処理自体をCommandクラスに実装する
+
+            // 今回は、既存のdeleteAllNotesを呼びつつ、UndoManagerのスタックをクリアする（Undo不可とする）
+            // もしUndo可能にしたい場合は、DeleteAllNotesCommandを作る必要がある
+            deleteAllNotes(); // 既存のメソッドで全削除
+            undoManager.clearStacks(); // 全削除はUndoできないという割り切り
+            parentFrame.updateUndoRedoMenuItems(false, false); // メニューも更新
+        }
+    }
+
     // PianoRollView.java の中に以下を追加
+
 
     public boolean isLoopRangeVisible() {
         return this.showLoopRange;
@@ -538,53 +615,99 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
 
     // --- Mouse Events ---
+    // PianoRollView.java の mouseClicked メソッド全体
+
     @Override
     public void mouseClicked(MouseEvent e) {
         if (isDrawingWithPencil) { // ペンシル描画中はクリックイベントを無視
             return;
         }
-        if (e.getButton() == MouseEvent.BUTTON1  && !isLongPress) {
-            if (e.getX() < KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) { // Click on Piano Key
+        // isLongPress はこのメソッドのスコープ外で定義・更新されている前提
+        // もし isLongPress がこのメソッド内でのみ判定されるべきなら、
+        // mousePressed, mouseReleased と連携してフラグを管理する必要があります。
+        // ここでは、既に isLongPress が適切に設定されているものとします。
+        if (e.getButton() == MouseEvent.BUTTON1 && !isLongPress) {
+
+            if (e.getX() < KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+                // --- ピアノ鍵盤をクリックした場合 ---
                 int pitch = yToPitch(e.getY());
                 if (pitch != -1) {
-                    // Optional: Play note on key click (requires simple synth)
-                    System.out.println("Key clicked: " + pitch);
+                    System.out.println("Key clicked (audition): " + pitch);
+                    // TODO: ここで音を鳴らすプレビュー機能を実装する (例: playbackManager.playPreviewNote(pitch);)
+                    // ノートはここでは作成しない方針
                 }
-            } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) { // Click on Note Area
-                if (!e.isShiftDown()) {
+            } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+                // --- ノートエリアをクリックした場合 ---
+                if (!e.isShiftDown()) { // Shiftキーが押されていない場合 (ペンシル描画と区別)
                     Optional<Note> clickedNoteOpt = getNoteAt(e.getX(), e.getY());
-                if (!clickedNoteOpt.isPresent()) { // Clicked on empty space, create note
-                    int pitch = yToPitch(e.getY());
-                    long startTime = snapToGrid(xToTick(e.getX()), 16); // Snap to 16th
-                    long duration = ppqn; // Default 1 beat duration
-                    if (pitch != -1) {
-                        Note newNote = new Note(pitch, startTime, duration, 100, 0);
-                        notes.add(newNote);
-                        selectedNote = newNote;
-                        if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
-                        if (startTime + duration > totalTicks) {
-                            totalTicks = startTime + duration + (long)ppqn * 4; // Extend totalTicks if needed
-                            updatePreferredSize();
+
+                    if (!clickedNoteOpt.isPresent()) {
+                        // --- ノートがない空白部分をクリックした場合：新しいノートを作成 ---
+                        int pitch = yToPitch(e.getY());
+                        long startTime = snapToGrid(xToTick(e.getX()), 16); // 16分音符にスナップ
+                        long duration = ppqn; // デフォルトの長さは1拍 (PPQNに依存)
+
+                        if (pitch != -1) { // 有効なピッチ範囲内
+                            Note newNote = new Note(pitch, startTime, duration, 100, 0); // Velocity 100, Channel 0
+
+                            // Undo対応: AddNoteCommand を作成して実行
+                            AddNoteCommand addCmd = new AddNoteCommand(this, this.notes, newNote);
+                            undoManager.executeCommand(addCmd); // これによりノートがリストに追加され、Undoスタックに積まれる
+
+                            // (オプション) 追加したノートを選択状態にする
+                            // selectedNote = newNote; // コマンドのexecute内や、ここで明示的に行う
+                            // selectedNotesList.clear();
+                            // selectedNotesList.add(newNote);
+
+                            if (parentFrame != null) {
+                                parentFrame.updateNoteInfo(newNote); // 選択情報を更新
+                            }
+
+                            // ピアノロール全体の長さが足りなければ拡張
+                            if (startTime + duration > totalTicks) {
+                                totalTicks = startTime + duration + (long)ppqn * 4; // 少し余裕を持たせる
+                                updatePreferredSize();
+                            }
+                            // repaint(); // undoManager.executeCommand() 内で repaint が呼ばれるので通常は不要
                         }
-                        repaint();
+                    } else {
+                        // --- 既存のノートをクリックした場合：そのノートを選択 ---
+                        // mousePressed で選択処理を行っているため、ここでは通常何もしなくても良いか、
+                        // あるいはダブルクリックなどの特殊な操作をここでハンドリングする。
+                        // 今回は mousePressed での選択を優先し、ここでは何もしない。
+                        // Note clickedNote = clickedNoteOpt.get();
+                        // selectedNote = clickedNote;
+                        // selectedNotesList.clear();
+                        // selectedNotesList.add(clickedNote);
+                        // if (parentFrame != null) {
+                        //     parentFrame.updateNoteInfo(clickedNote);
+                        // }
+                        // repaint();
+                        System.out.println("Existing note clicked. Selection handled by mousePressed.");
                     }
                 }
+            } else if (e.getY() < RULER_HEIGHT && e.getX() >= KEY_WIDTH) {
+                // --- ルーラーをクリックした場合：ループ範囲を設定 ---
+                if (e.isShiftDown()) { // Shift + クリックでループ終了点を設定
+                    loopEndTick = snapToGrid(xToTick(e.getX()), 4); // 拍単位にスナップ
+                } else { // クリックでループ開始点を設定
+                    loopStartTick = snapToGrid(xToTick(e.getX()), 4); // 拍単位にスナップ
                 }
-                // Selection is handled in mousePressed for drag-ability
-            } else if (e.getY() < RULER_HEIGHT && e.getX() >= KEY_WIDTH) { // Click on Ruler
-                // Set loop points or playback start (example for loop)
-                if (e.isShiftDown()) {
-                    loopEndTick = snapToGrid(xToTick(e.getX()), 4);
-                } else {
-                    loopStartTick = snapToGrid(xToTick(e.getX()), 4);
-                }
-                if (loopEndTick < loopStartTick) { // Swap if end is before start
+
+                // 開始点が終了点より後にならないように調整
+                if (loopEndTick < loopStartTick && e.isShiftDown()) { // 終了点を設定しようとして逆転した場合
+                    //何もしないか、エラーを出すか、あるいは開始点を終了点に合わせるか
+                } else if (loopEndTick < loopStartTick) { // 開始点を設定して逆転した場合
                     long temp = loopStartTick;
-                    loopStartTick = loopEndTick;
-                    loopEndTick = temp;
+                    loopStartTick = loopEndTick; // これは実質的に shiftなしでendをクリックしたのと同じになる
+                    loopEndTick = temp; // このswapは意図しないかもしれないので、UI/UXを要検討
                 }
+
+
                 showLoopRange = true;
-                if (parentFrame != null) parentFrame.updateLoopButtonText();
+                if (parentFrame != null) {
+                    parentFrame.updateLoopButtonText();
+                }
                 repaint();
             }
         }
@@ -633,8 +756,6 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 //            repaint();
         }
     }
-
-
 
     @Override
     public void mousePressed(MouseEvent e) {
