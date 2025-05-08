@@ -4,16 +4,16 @@ import org.codesfactory.ux.pianoroll.PianoRollView; // ★★★ この行を追
 import java.util.Stack;
 
 public class UndoManager {
-    private Stack<Command> undoStack = new Stack<>();
-    private Stack<Command> redoStack = new Stack<>();
-    private PianoRollView view; // repaintなどのためにViewへの参照を持つ
+    final private Stack<Command> undoStack = new Stack<>();
+    final private Stack<Command> redoStack = new Stack<>();
+    final private PianoRollView view; // repaintなどのためにViewへの参照を持つ
 
     public UndoManager(PianoRollView view) {
         this.view = view;
     }
 
     public void executeCommand(Command command) {
-        // command.execute(); // 設計による
+        command.execute();
         undoStack.push(command);
         redoStack.clear();
         updateUndoRedoStates();

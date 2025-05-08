@@ -1,130 +1,149 @@
-// PianoRoll.java
+// PianoRoll.java (再修正版)
 
 package org.codesfactory.ux.pianoroll;
-
-// commands パッケージのインポート (前回提示されたUndoManagerなどがある前提)
-//import org.codesfactory.ux.pianoroll.commands.UndoManager;
 
 import javax.sound.midi.InvalidMidiDataException;
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
-import java.awt.event.InputEvent; // Redoショートカットのため
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.io.File;
 import java.io.IOException;
 import java.text.MessageFormat;
-// import java.awt.event.ActionEvent; // JMenuItemのリスナーで暗黙的に使われるので明示的でなくてもOK
+import java.util.List; // ★★★ java.util.List をインポート ★★★
+// import java.awt.List; // ← 不要、もしあれば削除
 
 public class PianoRoll extends JFrame {
-    private PianoRollView pianoRollView;
-    private JScrollPane scrollPane;
-    private PlaybackManager playbackManager;
 
-    private JLabel infoLabel;
-    private JFileChooser fileChooser;
-    private JButton playButton, stopButton, loopButton;
-
-    // private UndoManager undoManager; // PianoRollViewが持つ形に変更も検討したが、Frameが持つ方が自然か
+    // --- Fields ---
+    private final PianoRollView pianoRollView; // View (final)
+    private final PlaybackManager playbackManager; // Playback (final)
+    private final JScrollPane scrollPane;
+    private final JLabel infoLabel;
+    private final JFileChooser fileChooser;
+    private JButton playButton;
+    private JButton stopButton;
+    private JButton loopButton;
     private JMenuItem undoItem;
     private JMenuItem redoItem;
+    private JMenuItem deleteAllItem;
 
-    private File currentFile = null;
+    private File currentFile = null; // 現在開いている/保存したファイル
 
+    // --- Constructor ---
     public PianoRoll(boolean isFullScreen, int width, int height) {
         setTitle("Java Piano Roll");
-        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE); // Close operation handled in listener
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosing(java.awt.event.WindowEvent windowEvent) {
-                if (playbackManager != null) {
-                    playbackManager.stop();
-                    playbackManager.close();
-                }
-                System.exit(0);
+                handleWindowClosing();
             }
         });
 
         setLayout(new BorderLayout());
 
-        // PianoRollView のインスタンス化は一度だけ
-        // UndoManager は PianoRollView が持つように変更（Viewの操作と密結合するため）
-        pianoRollView = new PianoRollView(this); // PianoRollView が自身の UndoManager を持つ
+        // Initialize core components
+        pianoRollView = new PianoRollView(this);
         playbackManager = new PlaybackManager(pianoRollView);
 
+        // Setup UI components
         scrollPane = new JScrollPane(pianoRollView);
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_ALWAYS);
-        if (pianoRollView.getHeight() > 0 && pianoRollView.getPpqn() > 0) { // 初期化後に値がセットされることを考慮
-            scrollPane.getVerticalScrollBar().setUnitIncrement(Math.max(1, pianoRollView.getHeight() / 20));
-            scrollPane.getHorizontalScrollBar().setUnitIncrement(Math.max(1, (int) (pianoRollView.getPpqn() * pianoRollView.getPixelsPerTickSafe() / 4)));
-        }
+        // Adjust scroll increments (consider doing this after the component is realized/sized)
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        scrollPane.getHorizontalScrollBar().setUnitIncrement(30);
 
+        // Create UI elements (Toolbar, StatusPanel, MenuBar)
+        JToolBar toolBar = createToolbar();
+        JPanel statusPanel = createStatusPanel();
+        infoLabel = new JLabel("No note selected."); // Initialize infoLabel here
+        statusPanel.add(infoLabel);
+        JMenuBar menuBar = createMenuBar();
+        // Assign menu items to fields for later access (enable/disable)
+        undoItem = menuBar.getMenu(1).getItem(0); // Assuming Edit is the second menu (index 1), Undo is the first item (index 0)
+        redoItem = menuBar.getMenu(1).getItem(1); // Redo is the second item
+        deleteAllItem = menuBar.getMenu(1).getItem(3); // Delete All is the fourth item (after separator)
 
-        add(createToolbar(), BorderLayout.NORTH);
+        add(toolBar, BorderLayout.NORTH);
         add(scrollPane, BorderLayout.CENTER);
-        add(createStatusPanel(), BorderLayout.SOUTH);
+        add(statusPanel, BorderLayout.SOUTH);
+        setJMenuBar(menuBar);
 
-        setupMenuBar(); // メニューバー設定 (Undo/Redoアイテムもここで初期化)
-
+        // Initialize File Chooser
         fileChooser = new JFileChooser();
         fileChooser.setFileFilter(new FileNameExtensionFilter("MIDI Files (*.mid, *.midi)", "mid", "midi"));
 
+        // Set window size and location
         if (isFullScreen) {
             setExtendedState(JFrame.MAXIMIZED_BOTH);
         } else {
+            // pack(); // Optional: Size based on component preferred sizes before setting explicit size
             setSize(width, height);
         }
-        setLocationRelativeTo(null);
+        setLocationRelativeTo(null); // Center on screen
 
-        // 初期状態でUndo/Redoメニューを更新 (PianoRollViewのUndoManagerを参照)
-        updateUndoRedoMenuItems(pianoRollView.getUndoManager().canUndo(), pianoRollView.getUndoManager().canRedo());
+        // Set initial state for Undo/Redo menu items
+        updateUndoRedoMenuItems(false, false); // Initially disabled
     }
+
+    // --- UI Creation Methods ---
 
     private JToolBar createToolbar() {
         JToolBar toolBar = new JToolBar();
         toolBar.setFloatable(false);
 
-        playButton = new JButton("Play");
+        // Play Button
+        playButton = new JButton("Play"); // Assign to field
         playButton.addActionListener(e -> {
             if (playbackManager.isPlaying()) {
                 playbackManager.stop();
-                playButton.setText("Play");
+                // State update (button text) will be triggered by PlaybackManager calling updatePlayButtonState
             } else {
                 pianoRollView.requestFocusInWindow();
-                playbackManager.loadNotes(pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+                List<Note> notesForPlayback = pianoRollView.getAllNotes(); // Uses java.util.List
+                System.out.println("Play Button: Loading " + notesForPlayback.size() + " notes for playback.");
+                playbackManager.loadNotes(notesForPlayback, pianoRollView.getPpqn());
+
                 if (pianoRollView.isLoopRangeVisible()) {
                     playbackManager.setLoop(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
                 } else {
                     playbackManager.clearLoop();
                 }
                 playbackManager.play();
-                playButton.setText("Pause");
+                // State update (button text) called here for immediate feedback
+                updatePlayButtonState(true);
             }
         });
         toolBar.add(playButton);
 
-        stopButton = new JButton("Stop");
+        // Stop Button
+        stopButton = new JButton("Stop"); // Assign to field
         stopButton.addActionListener(e -> {
             playbackManager.stop();
-            playButton.setText("Play");
+            // State update (button text) will be triggered by PlaybackManager calling updatePlayButtonState
         });
         toolBar.add(stopButton);
 
-        loopButton = new JButton("Loop Off");
+        // Loop Button
+        loopButton = new JButton("Loop Off"); // Assign to field
         loopButton.addActionListener(e -> {
             if (pianoRollView.isLoopRangeVisible()) {
                 pianoRollView.clearLoopRange();
                 playbackManager.clearLoop();
-                loopButton.setText("Loop Off");
+                // updateLoopButtonText(); // View change triggers repaint which should be sufficient? Or call explicitly.
             } else {
                 pianoRollView.setLoopRange(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
                 playbackManager.setLoop(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
-                loopButton.setText("Loop On");
+                // updateLoopButtonText();
             }
+            updateLoopButtonText(); // Call after action regardless
         });
         toolBar.add(loopButton);
 
+        // Zoom Buttons
         toolBar.addSeparator();
         JButton zoomInHBtn = new JButton("H Zoom +");
         zoomInHBtn.addActionListener(e -> pianoRollView.zoomInHorizontal());
@@ -132,7 +151,6 @@ public class PianoRoll extends JFrame {
         JButton zoomOutHBtn = new JButton("H Zoom -");
         zoomOutHBtn.addActionListener(e -> pianoRollView.zoomOutHorizontal());
         toolBar.add(zoomOutHBtn);
-
         toolBar.addSeparator();
         JButton zoomInVBtn = new JButton("V Zoom +");
         zoomInVBtn.addActionListener(e -> pianoRollView.zoomInVertical());
@@ -144,25 +162,16 @@ public class PianoRoll extends JFrame {
         return toolBar;
     }
 
-    public void updateLoopButtonText() {
-        if (pianoRollView != null && pianoRollView.isLoopRangeVisible()) { // nullチェック追加
-            loopButton.setText("Loop On");
-        } else if (loopButton != null) { // nullチェック追加
-            loopButton.setText("Loop Off");
-        }
-    }
-
     private JPanel createStatusPanel() {
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        infoLabel = new JLabel("No note selected.");
-        statusPanel.add(infoLabel);
+        // infoLabel is initialized and added in the constructor after this panel is created
         return statusPanel;
     }
 
-    private void setupMenuBar() {
+    private JMenuBar createMenuBar() {
         JMenuBar menuBar = new JMenuBar();
 
-        // File Menu
+        // --- File Menu ---
         JMenu fileMenu = new JMenu("File");
         JMenuItem openItem = new JMenuItem("Open MIDI...");
         openItem.addActionListener(e -> openMidiFile());
@@ -180,39 +189,40 @@ public class PianoRoll extends JFrame {
 
         fileMenu.addSeparator();
         JMenuItem exitItem = new JMenuItem("Exit");
-        exitItem.addActionListener(e -> dispatchEvent(new java.awt.event.WindowEvent(this, java.awt.event.WindowEvent.WINDOW_CLOSING)));
+        exitItem.addActionListener(e -> handleWindowClosing()); // Call the same closing logic
         fileMenu.add(exitItem);
         menuBar.add(fileMenu);
 
-        // Edit Menu
+        // --- Edit Menu ---
         JMenu editMenu = new JMenu("Edit");
-        undoItem = new JMenuItem("Undo");
-        undoItem.addActionListener(e -> {
+        JMenuItem localUndoItem = new JMenuItem("Undo"); // Use local variable first
+        localUndoItem.addActionListener(e -> {
             if (pianoRollView != null) {
-                pianoRollView.getUndoManager().undo(); // PianoRollViewが持つUndoManagerを呼ぶ
+                pianoRollView.getUndoManager().undo();
             }
         });
-        undoItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Z, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
-        editMenu.add(undoItem);
+        localUndoItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Z, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
+        localUndoItem.setEnabled(false);
+        editMenu.add(localUndoItem);
 
-        redoItem = new JMenuItem("Redo");
-        redoItem.addActionListener(e -> {
+        JMenuItem localRedoItem = new JMenuItem("Redo"); // Use local variable first
+        localRedoItem.addActionListener(e -> {
             if (pianoRollView != null) {
-                pianoRollView.getUndoManager().redo(); // PianoRollViewが持つUndoManagerを呼ぶ
+                pianoRollView.getUndoManager().redo();
             }
         });
-        String osName = System.getProperty("os.name").toLowerCase();
+        String osName = System.getProperty("os.name", "").toLowerCase(); // Default to empty string if null
         if (osName.startsWith("mac") || osName.startsWith("darwin")) {
-            redoItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Z, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx() | InputEvent.SHIFT_DOWN_MASK)); // Cmd+Shift+Z
+            localRedoItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Z, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx() | InputEvent.SHIFT_DOWN_MASK));
         } else {
-            redoItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Y, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx())); // Ctrl+Y
+            localRedoItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_Y, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
         }
-        editMenu.add(redoItem);
+        localRedoItem.setEnabled(false);
+        editMenu.add(localRedoItem);
 
-        // (オプション) Delete All Notes を Editメニューに追加
         editMenu.addSeparator();
-        JMenuItem deleteAllItem = new JMenuItem("Delete All Notes");
-        deleteAllItem.addActionListener(e -> {
+        JMenuItem localDeleteAllItem = new JMenuItem("Delete All Notes"); // Use local variable first
+        localDeleteAllItem.addActionListener(e -> {
             int response = JOptionPane.showConfirmDialog(
                     PianoRoll.this,
                     "Are you sure you want to delete all notes?",
@@ -221,53 +231,103 @@ public class PianoRoll extends JFrame {
                     JOptionPane.WARNING_MESSAGE
             );
             if (response == JOptionPane.YES_OPTION && pianoRollView != null) {
-                pianoRollView.deleteAllNotesAndRecordCommand(); // コマンドとして記録するメソッドをViewに作る
+                pianoRollView.deleteAllNotesAndRecordCommand();
             }
         });
-        editMenu.add(deleteAllItem);
-
-
+        editMenu.add(localDeleteAllItem);
         menuBar.add(editMenu);
-        setJMenuBar(menuBar);
+
+        return menuBar; // Return the created menu bar
     }
 
-    // PianoRollViewのUndoManagerの状態に基づいてメニューアイテムを更新
+    // --- Public Methods Called by Other Classes (e.g., PianoRollView, UndoManager) ---
+
     public void updateUndoRedoMenuItems(boolean canUndo, boolean canRedo) {
-        if (undoItem != null) {
+        // Ensure menu items are initialized before updating
+        if (undoItem == null || redoItem == null) {
+            System.err.println("Error: Undo/Redo menu items not initialized yet.");
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
             undoItem.setEnabled(canUndo);
-        }
-        if (redoItem != null) {
             redoItem.setEnabled(canRedo);
-        }
+        });
     }
+
+    public void updatePlayButtonState(boolean isPlaying) {
+        SwingUtilities.invokeLater(() -> {
+            if (playButton != null) {
+                playButton.setText(isPlaying ? "Pause" : "Play");
+            }
+        });
+    }
+
+    public void updateLoopButtonText() {
+        SwingUtilities.invokeLater(() -> {
+            if (loopButton == null || pianoRollView == null) return;
+            loopButton.setText(pianoRollView.isLoopRangeVisible() ? "Loop On" : "Loop Off");
+        });
+    }
+
+    public void updateNoteInfo(Note note) {
+        SwingUtilities.invokeLater(() -> {
+            if (infoLabel == null || pianoRollView == null) return;
+            int selectedCount = pianoRollView.getSelectedNotesCount();
+            if (selectedCount > 1) {
+                infoLabel.setText(selectedCount + " notes selected");
+            } else if (selectedCount == 1 && note != null) {
+                // Use a default PPQN if pianoRollView.getPpqn() might be 0 initially
+                int ppqnForDisplay = Math.max(1, pianoRollView.getPpqn());
+                infoLabel.setText(MessageFormat.format("Selected: Pitch {0} ({1}), Start {2} ({3} beat), Duration {4} ({5} beat), Vel {6}",
+                        note.getPitch(), getPitchName(note.getPitch()),
+                        note.getStartTimeTicks(), String.format("%.2f", (double) note.getStartTimeTicks() / ppqnForDisplay),
+                        note.getDurationTicks(), String.format("%.2f", (double) note.getDurationTicks() / ppqnForDisplay),
+                        note.getVelocity()));
+            } else {
+                infoLabel.setText("No note selected.");
+            }
+        });
+    }
+
+
+    // --- File Handling ---
 
     private void openMidiFile() {
-        if (playbackManager.isPlaying()) playbackManager.stop();
-        if (playButton != null) playButton.setText("Play"); // nullチェック
+        if (playbackManager.isPlaying()) playbackManager.stop(); // Stop playback before opening
 
-        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
             try {
                 MidiHandler.MidiData midiData = MidiHandler.loadMidiFile(file);
-                pianoRollView.loadNotes(midiData.notes, midiData.ppqn, midiData.totalTicks);
-                playbackManager.loadNotes(midiData.notes, midiData.ppqn);
-                setTitle("Java Piano Roll - " + file.getName());
+                pianoRollView.loadNotes(midiData.notes, midiData.ppqn, midiData.totalTicks); // Load notes into view (clears undo history)
+                playbackManager.loadNotes(pianoRollView.getAllNotes(), pianoRollView.getPpqn()); // Load notes for playback
                 currentFile = file;
-                pianoRollView.getUndoManager().clearStacks(); // 新しいファイルを開いたらUndo/Redo履歴をクリア
-                updateUndoRedoMenuItems(false, false); // メニューも更新
-            } catch (InvalidMidiDataException | IOException ex) {
+                setTitle("Java Piano Roll - " + file.getName());
+            } catch (InvalidMidiDataException | IOException | NullPointerException ex) { // Catch potential NPE from loading too
                 JOptionPane.showMessageDialog(this, "Error opening MIDI file: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
                 ex.printStackTrace();
                 currentFile = null;
+                setTitle("Java Piano Roll");
+                // Optionally clear the view if loading failed significantly
+                // pianoRollView.loadNotes(new ArrayList<>(), MidiHandler.DEFAULT_PPQN, 0);
+                // playbackManager.loadNotes(new ArrayList<>(), MidiHandler.DEFAULT_PPQN);
             }
         }
     }
 
     private void saveMidiFileAs() {
         if (playbackManager.isPlaying()) playbackManager.stop();
-        if (playButton != null) playButton.setText("Play");
 
-        if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+        if (currentFile != null) {
+            fileChooser.setCurrentDirectory(currentFile.getParentFile());
+            fileChooser.setSelectedFile(new File(currentFile.getName()));
+        } else {
+            fileChooser.setSelectedFile(new File("Untitled.mid"));
+        }
+
+        int result = fileChooser.showSaveDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
             if (!file.getName().toLowerCase().endsWith(".mid") && !file.getName().toLowerCase().endsWith(".midi")) {
                 file = new File(file.getParentFile(), file.getName() + ".mid");
@@ -279,11 +339,12 @@ public class PianoRoll extends JFrame {
                 }
             }
             try {
+                // Save using the current notes from the view
                 MidiHandler.saveMidiFile(file, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
-                setTitle("Java Piano Roll - " + file.getName());
                 currentFile = file;
+                setTitle("Java Piano Roll - " + file.getName());
                 JOptionPane.showMessageDialog(this, "MIDI file saved successfully as " + file.getName(), "Save Successful", JOptionPane.INFORMATION_MESSAGE);
-            } catch (InvalidMidiDataException | IOException ex) {
+            } catch (InvalidMidiDataException | IOException | NullPointerException ex) { // Catch potential NPE
                 JOptionPane.showMessageDialog(this, "Error saving MIDI file: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
                 ex.printStackTrace();
             }
@@ -291,40 +352,57 @@ public class PianoRoll extends JFrame {
     }
 
     private void saveCurrentMidiFile() {
-        if (playbackManager.isPlaying()) playbackManager.stop();
-        if (playButton != null) playButton.setText("Play");
-
-        if (currentFile != null) {
-            try {
-                MidiHandler.saveMidiFile(currentFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
-                JOptionPane.showMessageDialog(this, "MIDI file saved successfully to " + currentFile.getName(), "Save Successful", JOptionPane.INFORMATION_MESSAGE);
-            } catch (InvalidMidiDataException | IOException ex) {
-                JOptionPane.showMessageDialog(this, "Error saving MIDI file: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
-                ex.printStackTrace();
-            }
-        } else {
+        if (currentFile == null) { // If file hasn't been saved yet, perform Save As
             saveMidiFileAs();
+            return;
+        }
+
+        if (playbackManager.isPlaying()) playbackManager.stop();
+
+        try {
+            // Save to the known file location
+            MidiHandler.saveMidiFile(currentFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+            System.out.println("File saved to " + currentFile.getPath()); // Console feedback is less intrusive
+            // Optional: Display status bar message briefly
+            // infoLabel.setText("File saved.");
+            // Timer timer = new Timer(2000, e -> updateNoteInfo(pianoRollView.selectedNote)); // Restore info after 2 sec
+            // timer.setRepeats(false);
+            // timer.start();
+
+        } catch (InvalidMidiDataException | IOException | NullPointerException ex) { // Catch potential NPE
+            JOptionPane.showMessageDialog(this, "Error saving MIDI file: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
+            ex.printStackTrace();
         }
     }
 
-    public void updateNoteInfo(Note note) {
-        if (pianoRollView == null) return; // 初期化前は実行しない
-        if (note != null) {
-            infoLabel.setText(MessageFormat.format("Selected: Pitch {0} ({1}), Start {2} ({3} beat), Duration {4} ({5} beat), Vel {6}", note.getPitch(), getPitchName(note.getPitch()), note.getStartTimeTicks(), String.format("%.2f", (double) note.getStartTimeTicks() / pianoRollView.getPpqn()), note.getDurationTicks(), String.format("%.2f", (double) note.getDurationTicks() / pianoRollView.getPpqn()), note.getVelocity()));
-        } else {
-            infoLabel.setText("No note selected. Click to create or select.");
-        }
-    }
-
+    // --- Utility ---
     private static final String[] PITCH_NAMES = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-
     public static String getPitchName(int midiNoteNumber) {
         if (midiNoteNumber < 0 || midiNoteNumber > 127) return "N/A";
-        int octave = (midiNoteNumber / 12) - 1;
+        int octave = (midiNoteNumber / 12) - 1; // MIDI 0 = C-1
         return PITCH_NAMES[midiNoteNumber % 12] + octave;
     }
 
+    // --- Window Closing Logic ---
+    private void handleWindowClosing() {
+        // TODO: Add check for unsaved changes and prompt user if necessary
+        System.out.println("Window closing...");
+        if (playbackManager != null) {
+            playbackManager.close();
+        }
+        dispose(); // Close the window
+        System.exit(0); // Terminate the application
+    }
+
+    // --- Main Method ---
     public static void main(String[] args) {
+        // Set Look and Feel (optional)
+        try {
+            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+        } catch (Exception e) {
+            System.err.println("Couldn't set system look and feel.");
+        }
+
         SwingUtilities.invokeLater(() -> {
             PianoRoll frame = new PianoRoll(false, 1280, 720);
             frame.setVisible(true);
