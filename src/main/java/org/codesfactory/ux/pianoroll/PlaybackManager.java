@@ -182,18 +182,32 @@ public class PlaybackManager {
      * @param startTick ループ開始Tick
      * @param endTick ループ終了Tick (このTickは含まれない)
      */
+    // PlaybackManager.java
     public void setLoop(long startTick, long endTick) {
-        if (sequencer != null) {
-            if (startTick >= 0 && endTick > startTick) {
-                sequencer.setLoopStartPoint(startTick);
-                sequencer.setLoopEndPoint(endTick);
+        if (sequencer != null && sequence != null) { // ★ sequence の null チェック追加
+            long sequenceLength = sequence.getTickLength();
+            if (sequenceLength <= 0) { // シーケンス長が0または負ならループ設定不可
+                System.err.println("PlaybackManager: Cannot set loop, sequence length is not positive: " + sequenceLength);
+                clearLoop();
+                return;
+            }
+
+            // startTick と endTick をシーケンス長内に丸める
+            long validStartTick = Math.max(0, Math.min(startTick, sequenceLength -1)); // 終了点は含まないので -1
+            long validEndTick = Math.max(validStartTick +1 , Math.min(endTick, sequenceLength)); // 開始点より大きく、シーケンス長以内
+
+            if (validStartTick < validEndTick) {
+                sequencer.setLoopStartPoint(validStartTick);
+                sequencer.setLoopEndPoint(validEndTick); // EndPoint は通常そのTickの手前まで
                 sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
-                this.isLoopingEnabled = true; // ★ ループフラグを立てる
-                System.out.println("PlaybackManager: Loop set from " + startTick + " to " + endTick);
+                this.isLoopingEnabled = true;
+                System.out.println("PlaybackManager: Loop set from " + validStartTick + " to " + validEndTick + " (Sequence length: " + sequenceLength + ")");
             } else {
-                System.err.println("PlaybackManager: Invalid loop points. start=" + startTick + ", end=" + endTick);
+                System.err.println("PlaybackManager: Invalid loop points after clamping. start=" + validStartTick + ", end=" + validEndTick);
                 clearLoop();
             }
+        } else {
+            System.err.println("PlaybackManager: Sequencer or sequence not available for setting loop.");
         }
     }
 
