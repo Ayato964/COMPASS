@@ -1,6 +1,7 @@
 package org.codesfactory.ux.pianoroll;
 
 import javax.sound.midi.*;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -102,5 +103,43 @@ public class MidiHandler {
             }
         }
         MidiSystem.write(sequence, MidiSystem.getMidiFileTypes(sequence)[0], file);
+    }
+
+    public static MidiData loadMidiFromBytes(byte[] midiBytes) throws InvalidMidiDataException, IOException {
+        Sequence sequence = MidiSystem.getSequence(new ByteArrayInputStream(midiBytes));
+        List<Note> notes = new ArrayList<>();
+        int ppqn = sequence.getResolution();
+        if (ppqn == 0) ppqn = DEFAULT_PPQN;
+
+        long maxTick = 0;
+
+        for (Track track : sequence.getTracks()) {
+            for (int i = 0; i < track.size(); i++) {
+                MidiEvent event = track.get(i);
+                MidiMessage message = event.getMessage();
+                if (message instanceof ShortMessage) {
+                    ShortMessage sm = (ShortMessage) message;
+                    long tick = event.getTick();
+                    if (tick > maxTick) maxTick = tick;
+
+                    if (sm.getCommand() == ShortMessage.NOTE_ON && sm.getData2() > 0) {
+                        int pitch = sm.getData1();
+                        int velocity = sm.getData2();
+                        int channel = sm.getChannel();
+                        long durationTicks = findNoteOffDuration(track, i + 1, channel, pitch, tick);
+                        if (durationTicks > 0) {
+                            notes.add(new Note(pitch, tick, durationTicks, velocity, channel));
+                            if (tick + durationTicks > maxTick) maxTick = tick + durationTicks;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (maxTick < (long)ppqn * 4 * 4) {
+            maxTick = (long)ppqn * 4 * 8;
+        }
+
+        return new MidiData(notes, ppqn, maxTick);
     }
 }

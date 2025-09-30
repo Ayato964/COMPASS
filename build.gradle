@@ -11,6 +11,14 @@ repositories {
 }
 
 dependencies {
+    // For a modern dark look and feel
+    implementation 'com.formdev:flatlaf:3.4.1'
+
+    // For HTTP requests to MozartAPI
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // For parsing JSON responses from MozartAPI
+    implementation 'com.google.code.gson:gson:2.10.1'
+
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }

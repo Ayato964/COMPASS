@@ -1,6 +1,9 @@
 package org.codesfactory;
 
+import com.formdev.flatlaf.FlatDarkLaf;
 import org.codesfactory.ux.pianoroll.PianoRoll;
+
+import javax.swing.*;
 
 public class Main {
     /**
@@ -8,9 +11,12 @@ public class Main {
      *
      * @param args command line arguments
      */
-    public static final PianoRoll pianoRoll = new PianoRoll(true, 1200, 800);
     public static void main(String[] args) {
-        System.out.println("Hello world!");
-        pianoRoll.setVisible(true);
+        // Set up the look and feel and create the UI on the Event Dispatch Thread
+        SwingUtilities.invokeLater(() -> {
+            FlatDarkLaf.setup();
+            PianoRoll pianoRoll = new PianoRoll(true, 1200, 800);
+            pianoRoll.setVisible(true);
+        });
     }
 }

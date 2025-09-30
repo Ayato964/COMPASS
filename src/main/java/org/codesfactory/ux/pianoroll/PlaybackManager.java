@@ -17,21 +17,29 @@ public class PlaybackManager {
      * @param view 再生ヘッドの更新対象となるPianoRollView
      */
     public PlaybackManager(PianoRollView view) {
-        this.pianoRollView = view; // viewは必須とする
+        this.pianoRollView = view;
         try {
-            sequencer = MidiSystem.getSequencer();
+            // Get a sequencer that is not connected to a default device
+            sequencer = MidiSystem.getSequencer(false);
             if (sequencer == null) {
                 System.err.println("Cannot get a sequencer device.");
                 return;
             }
             sequencer.open();
 
-            // 再生終了時に再生位置をリセットし、Viewのヘッドも更新するリスナー
+            // Explicitly connect the sequencer to a synthesizer
+            Synthesizer synthesizer = MidiSystem.getSynthesizer();
+            synthesizer.open();
+            Receiver receiver = synthesizer.getReceiver();
+            Transmitter transmitter = sequencer.getTransmitter();
+            transmitter.setReceiver(receiver);
+
+            // Add a listener for the end of the track
             sequencer.addMetaEventListener(meta -> {
                 if (meta.getType() == 47) { // End of Track meta event
                     // ★★★ ループ状態を自身のフラグで確認 ★★★
                     if (!this.isLoopingEnabled) { // ループ中でなければ停止処理
-                        stopPlaybackInternal(); // 再生停止とヘッドリセット
+                        stopAndReset(); // 再生停止とヘッドリセット
                     } else {
                         // ループ中の場合、Sequencerが自動でループ開始点に戻る
                         // 必要であれば再生ヘッド表示を強制的にループ開始点に合わせる？
@@ -58,7 +66,7 @@ public class PlaybackManager {
             return;
         }
         if (sequencer.isRunning()) {
-            stopPlaybackInternal();
+            stopAndReset();
         }
 
         try {
@@ -129,16 +137,27 @@ public class PlaybackManager {
     public void stop() {
         if (sequencer != null) { // isRunning() でなくても停止処理は試みる
             System.out.println("PlaybackManager: Stopping playback requested.");
-            stopPlaybackInternal();
+            stopAndReset();
         } else {
             System.out.println("PlaybackManager: Sequencer not available.");
+        }
+    }
+
+    public void pause() {
+        if (sequencer != null && sequencer.isRunning()) {
+            sequencer.stop(); // This effectively pauses playback
+            stopPlaybackHeadUpdaterThread();
+            if (pianoRollView != null) {
+                pianoRollView.updateParentPlayButtonState(false);
+            }
+            System.out.println("PlaybackManager: Paused at tick " + sequencer.getTickPosition());
         }
     }
 
     /**
      * 内部的な再生停止処理（ヘッド位置リセットとView更新を含む）
      */
-    private void stopPlaybackInternal() {
+    private void stopAndReset() {
         this.isLoopingEnabled = false; // 停止時はループも解除
         if (sequencer != null && sequencer.isRunning()) {
             sequencer.stop();
@@ -175,6 +194,24 @@ public class PlaybackManager {
      */
     public boolean isPlaying() {
         return sequencer != null && sequencer.isRunning();
+    }
+
+    public Sequence getSequence() {
+        return sequence;
+    }
+
+    public float getTempo() {
+        if (sequencer != null) {
+            return sequencer.getTempoInBPM();
+        }
+        return 120.0f; // Default tempo
+    }
+
+    public void setTickPosition(long tick) {
+        if (sequencer != null) {
+            sequencer.setTickPosition(tick);
+            updatePlaybackHead(tick);
+        }
     }
 
     /**
@@ -274,12 +311,25 @@ public class PlaybackManager {
         playbackHeadUpdaterThread.start();
     }
 
+    private void stopPlaybackHeadUpdaterThread() {
+        if (playbackHeadUpdaterThread != null && playbackHeadUpdaterThread.isAlive()) {
+            try {
+                playbackHeadUpdaterThread.interrupt();
+                playbackHeadUpdaterThread.join(100);
+                System.out.println("PlaybackManager: Head updater thread stopped.");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        playbackHeadUpdaterThread = null;
+    }
+
     /**
      * Sequencerリソースを解放します。アプリケーション終了時に呼び出されるべきです。
      */
     public void close() {
         System.out.println("PlaybackManager: Closing...");
-        stopPlaybackInternal(); // 停止処理を呼ぶ
+        stopAndReset(); // 停止処理を呼ぶ
         if (sequencer != null && sequencer.isOpen()) {
             sequencer.close();
             System.out.println("PlaybackManager: Sequencer closed.");

@@ -46,7 +46,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private int beatsPerMeasure = 4;
     private int beatUnit = 4;
     private final List<Note> notes = new ArrayList<>(); // ★ finalにして再代入を防ぐ
-    private long totalTicks = (long) ppqn * beatsPerMeasure * 16;
+    private long totalTicks = (long) ppqn * beatsPerMeasure * 256;
 
     // --- Selection & Interaction State ---
     private Note selectedNote = null; // 現在主に選択されているノート（単一選択、または複数選択の代表）
@@ -288,14 +288,24 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     public boolean isLoopRangeVisible() {
         return this.showLoopRange;
     }
-    public void setLoopRange(long start, long end) {
-        this.loopStartTick = Math.max(0, start);
-        this.loopEndTick = Math.max(this.loopStartTick, end);
+    public void setLoopRange(long p1, long p2) {
+        this.loopStartTick = Math.max(0, Math.min(p1, p2));
+        this.loopEndTick = Math.max(0, Math.max(p1, p2));
+        // Ensure start is strictly less than end for a valid loop
+        if (this.loopStartTick >= this.loopEndTick) {
+            this.loopStartTick = Math.max(0, this.loopEndTick - (ppqn > 0 ? ppqn / 4 : 120)); // Ensure a minimal loop length
+        }
         this.showLoopRange = true;
+        if (parentFrame != null) {
+            parentFrame.updateLoopButtonText();
+        }
         repaint();
     }
     public void clearLoopRange() {
         this.showLoopRange = false;
+        if (parentFrame != null) {
+            parentFrame.updateLoopButtonText();
+        }
         repaint();
     }
     public long getLoopStartTick() { return loopStartTick; }
@@ -746,46 +756,39 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 }
             } else if (e.getY() < RULER_HEIGHT && e.getX() >= KEY_WIDTH) {
                 // --- ルーラーエリアをクリックした場合 ---
+                long clickedTick = snapToGrid(xToTick(e.getX()), 4); // クリック位置を拍にスナップ
+
+                if (e.isAltDown()) {
+                    // Alt + Click for loop range setting
+                    if (SwingUtilities.isLeftMouseButton(e)) {
+                        setLoopRange(clickedTick, loopEndTick);
+                        System.out.println("Loop start set by Alt+LeftClick: " + loopStartTick);
+                    } else if (SwingUtilities.isRightMouseButton(e)) {
+                        setLoopRange(loopStartTick, clickedTick);
+                        System.out.println("Loop end set by Alt+RightClick: " + loopEndTick);
+                    }
+                    if (parentFrame != null) parentFrame.updateLoopButtonText();
+                    return; // Consume event
+                }
+
                 System.out.println("Ruler area clicked.");
-                long clickedTick = snapToGrid(xToTick(e.getX()), 4); // クリック位置を拍にスナップ (共通)
 
                 if (e.isShiftDown()) {
-                    // ★★★ Shift + クリック：再生開始位置 (playbackTick) を変更 ★★★
+                    // Shift + クリック：再生開始位置 (playbackTick) を変更
                     setPlaybackTick(clickedTick);
                     System.out.println(String.format("  Playback position set to: %d by Shift+Click on ruler.", clickedTick));
-                    // この操作ではループ範囲表示やボタンテキストは変更しない
 
-                } else if (e.isControlDown() || e.isMetaDown()) { // Ctrlキー(Win/Linux) または Commandキー(Mac)
-                    // ★★★ Ctrl/Cmd + クリック：ループ終了位置 (loopEndTick) を設定 ★★★
-                    loopEndTick = clickedTick;
+                } else if (e.isControlDown() || e.isMetaDown()) { // Ctrl/Cmd + クリック：ループ終了位置 (loopEndTick) を設定
+                    setLoopRange(loopStartTick, clickedTick);
                     System.out.println(String.format("  Loop end set to: %d by Ctrl/Cmd+Click on ruler.", loopEndTick));
-
-                    // 開始点が終了点より後にならないように、または最小ループ長を確保するなどの調整
-                    if (loopStartTick >= loopEndTick) {
-                        loopStartTick = Math.max(0, loopEndTick - (ppqn > 0 ? ppqn : 480)); // 終了点の1拍前から開始 (最小1拍ループ)
-                        System.out.println(String.format("    Adjusted loop start to: %d", loopStartTick));
-                    }
-                    showLoopRange = true;
-                    if (parentFrame != null) {
-                        parentFrame.updateLoopButtonText();
-                    }
-                    repaint();
+                    if (parentFrame != null) parentFrame.updateLoopButtonText();
 
                 } else {
-                    // ★★★ 通常のクリック (修飾キーなし)：ループ開始位置 (loopStartTick) を設定 ★★★
-                    loopStartTick = clickedTick;
-                    System.out.println(String.format("  Loop start set to: %d by Click on ruler.", loopStartTick));
-
-                    // 終了点が開始点より前にならないように、またはデフォルトループ長を設定
-                    if (loopEndTick <= loopStartTick) {
-                        loopEndTick = loopStartTick + (ppqn > 0 ? ppqn * beatsPerMeasure : 480 * 4); // 開始点から1小節後を終了点に設定
-                        System.out.println(String.format("    Adjusted loop end to: %d", loopEndTick));
-                    }
-                    showLoopRange = true;
+                    // No modifier click: Set playback position
                     if (parentFrame != null) {
-                        parentFrame.updateLoopButtonText();
+                        parentFrame.setPlaybackTickPosition(clickedTick);
                     }
-                    repaint();
+                    System.out.println(String.format("  Playback position set to: %d by Click on ruler.", clickedTick));
                 }
             }
         }
@@ -808,6 +811,32 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 outlinePathPoints.clear();
                 outlinePathPoints.add(e.getPoint());
                 repaint();
+            } else if (e.getX() >= KEY_WIDTH && e.getY() < RULER_HEIGHT) {
+                // --- Ruler Area Click Logic ---
+                long clickedTick = snapToGrid(xToTick(e.getX()), 4);
+
+                if (e.isControlDown()) { // Use Ctrl key as requested
+                    if (SwingUtilities.isLeftMouseButton(e)) {
+                        // Ctrl + Left Click: Set loop start
+                        setLoopRange(clickedTick, loopEndTick);
+                        System.out.println("Loop start set by Ctrl+LeftClick: " + loopStartTick);
+                    } else if (SwingUtilities.isRightMouseButton(e)) {
+                        // Ctrl + Right Click: Set loop end
+                        setLoopRange(loopStartTick, clickedTick);
+                        System.out.println("Loop end set by Ctrl+RightClick: " + loopEndTick);
+                    }
+                    if (parentFrame != null) parentFrame.updateLoopButtonText();
+
+                } else if (!e.isShiftDown() && !e.isAltDown() && !e.isMetaDown()) {
+                    // No modifier click: Set playback position
+                    if (parentFrame != null) {
+                        parentFrame.setPlaybackTickPosition(clickedTick);
+                    }
+                    System.out.println(String.format("  Playback position set to: %d by Click on ruler.", clickedTick));
+                }
+                // Consume the event to prevent other interactions
+                e.consume();
+
             } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 // 通常のノートエリアプレス
                 isDrawingOutline = false;
@@ -1084,77 +1113,15 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     @Override
     public void mouseWheelMoved(MouseWheelEvent e) {
-        if (e.isAltDown()) { // Horizontal zoom (time)
-            // double oldPixelsPerTick = pixelsPerTick; // ← 削除
-            if (e.getWheelRotation() < 0) pixelsPerTick *= 1.25; else pixelsPerTick /= 1.25;
-            pixelsPerTick = Math.max(0.005, Math.min(pixelsPerTick, 2.0)); // Clamp zoom
-
-            JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
-            if (scrollPane != null) {
-                JViewport viewport = scrollPane.getViewport();
-                if (viewport != null) {
-                    Point viewPos = viewport.getViewPosition();
-                    int mouseXInComponent = e.getX();
-                    double mouseTick = xToTick(mouseXInComponent);
-
-                    updatePreferredSize(); // サイズ更新
-
-                    // スクロール位置調整
-                    int newMouseXAfterZoom = tickToX((long) mouseTick);
-                    viewPos.x += (newMouseXAfterZoom - mouseXInComponent);
-                    viewPos.x = Math.max(0, Math.min(viewPos.x, getPreferredSize().width - viewport.getWidth()));
-                    viewport.setViewPosition(viewPos);
-                } else {
-                    // System.err.println("Could not get Viewport from ScrollPane for horizontal zoom."); // 必要なら残す
-                    updatePreferredSize();
-                }
-            } else {
-                // System.err.println("ScrollPane ancestor not found for horizontal zoom."); // 必要なら残す
-                updatePreferredSize();
-            }
-            repaint();
-
-        } else if (e.isShiftDown()) { // Vertical zoom (pitch)
-            // int oldNoteHeight = noteHeight; // ← 削除 (もし使っていないなら)
-            if (e.getWheelRotation() < 0) noteHeight += 1; else noteHeight -= 1;
-            noteHeight = Math.max(6, Math.min(noteHeight, 30)); // Clamp zoom
-
-            JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
-            if (scrollPane != null) {
-                JViewport viewport = scrollPane.getViewport();
-                if (viewport != null) {
-                    Point viewPos = viewport.getViewPosition();
-                    int mouseYInComponent = e.getY();
-                    int mousePitch = yToPitch(mouseYInComponent);
-                    if (mousePitch == -1) {
-                        Rectangle viewRect = viewport.getViewRect();
-                        mousePitch = yToPitch(viewRect.y + viewRect.height / 2);
-                    }
-
-                    updatePreferredSize(); // サイズ更新
-
-                    if (mousePitch != -1) {
-                        int newMouseY = pitchToY(mousePitch);
-                        viewPos.y += (newMouseY - mouseYInComponent);
-                        viewPos.y = Math.max(0, Math.min(viewPos.y, getPreferredSize().height - viewport.getHeight()));
-                        viewport.setViewPosition(viewPos);
-                    } else {
-                        // Pitchが取れない場合はサイズ更新のみ (updatePreferredSizeは上で呼ばれている)
-                    }
-                } else {
-                    // System.err.println("Could not get Viewport from ScrollPane for vertical zoom."); // 必要なら残す
-                    updatePreferredSize();
-                }
-            } else {
-                // System.err.println("ScrollPane ancestor not found for vertical zoom."); // 必要なら残す
-                updatePreferredSize();
-            }
-            repaint();
-
+        if (e.isControlDown() && !e.isShiftDown()) { // Horizontal zoom
+            if (e.getWheelRotation() < 0) zoomInHorizontal(); else zoomOutHorizontal();
+            e.consume();
+        } else if (e.isControlDown() && e.isShiftDown()) { // Vertical zoom
+            if (e.getWheelRotation() < 0) zoomInVertical(); else zoomOutVertical();
+            e.consume();
         } else { // Default scroll behavior
             JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
             if (scrollPane != null) {
-                // イベントを親の JScrollPane にディスパッチ
                 scrollPane.dispatchEvent(SwingUtilities.convertMouseEvent(this, e, scrollPane));
             }
         }
@@ -1190,6 +1157,14 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     @Override
     public void keyPressed(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_SPACE) {
+            if (parentFrame != null) {
+                parentFrame.togglePlayback();
+            }
+            e.consume(); // Prevent the space key from triggering other actions
+            return;
+        }
+
         if (e.getKeyCode() == KeyEvent.VK_DELETE || e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
             System.out.println("Delete/Backspace key pressed.");
             if (!selectedNotesList.isEmpty()) {
