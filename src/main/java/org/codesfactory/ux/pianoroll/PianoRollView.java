@@ -157,6 +157,24 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         return ppqn;
     }
 
+    public int getBeatsPerMeasure() {
+        return beatsPerMeasure;
+    }
+
+    public void selectNotesInRange(long startTick, long endTick) {
+        List<Note> newlySelected = new ArrayList<>();
+        for (Note note : notes) {
+            long noteStart = note.getStartTimeTicks();
+            // Select if the note starts within the range
+            if (noteStart >= startTick && noteStart < endTick) {
+                newlySelected.add(note);
+            }
+        }
+        System.out.println("Selected " + newlySelected.size() + " notes in range [" + startTick + ", " + endTick + ").");
+        setSelectedNotesAfterCommand(newlySelected);
+        repaint(); // Need to repaint to show selection
+    }
+
     // --- Helper methods for command execution ---
 
     public void setSelectedNoteAfterCommand(Note note) {

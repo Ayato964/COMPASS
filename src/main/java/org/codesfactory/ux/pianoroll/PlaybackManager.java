@@ -207,6 +207,12 @@ public class PlaybackManager {
         return 120.0f; // Default tempo
     }
 
+    public void setTempo(float bpm) {
+        if (sequencer != null) {
+            sequencer.setTempoInBPM(bpm);
+        }
+    }
+
     public void setTickPosition(long tick) {
         if (sequencer != null) {
             sequencer.setTickPosition(tick);

@@ -15,12 +15,13 @@ public class MidiHandler {
         public List<Note> notes;
         public int ppqn;
         public long totalTicks;
-        // TODO: Add time signature and tempo events if needed for advanced display
+        public float tempo; // Added tempo in BPM
 
-        public MidiData(List<Note> notes, int ppqn, long totalTicks) {
+        public MidiData(List<Note> notes, int ppqn, long totalTicks, float tempo) {
             this.notes = notes;
             this.ppqn = ppqn;
             this.totalTicks = totalTicks;
+            this.tempo = tempo;
         }
     }
 
@@ -31,18 +32,18 @@ public class MidiHandler {
         if (ppqn == 0) ppqn = DEFAULT_PPQN; // Fallback if resolution is timecode based
 
         long maxTick = 0;
+        float tempo = 120.0f; // Default tempo
+        boolean tempoFound = false;
 
-        // For simplicity, we'll read notes from the first track that has note events
-        // A more robust solution would handle multiple tracks or allow track selection
         for (Track track : sequence.getTracks()) {
             for (int i = 0; i < track.size(); i++) {
                 MidiEvent event = track.get(i);
                 MidiMessage message = event.getMessage();
+                long tick = event.getTick();
+                if (tick > maxTick) maxTick = tick;
+
                 if (message instanceof ShortMessage) {
                     ShortMessage sm = (ShortMessage) message;
-                    long tick = event.getTick();
-                    if (tick > maxTick) maxTick = tick;
-
                     if (sm.getCommand() == ShortMessage.NOTE_ON && sm.getData2() > 0) { // Note ON with velocity > 0
                         int pitch = sm.getData1();
                         int velocity = sm.getData2();
@@ -54,10 +55,18 @@ public class MidiHandler {
                             if (tick + durationTicks > maxTick) maxTick = tick + durationTicks;
                         }
                     }
+                } else if (message instanceof MetaMessage) {
+                    MetaMessage mm = (MetaMessage) message;
+                    if (mm.getType() == 0x51 && !tempoFound) { // Tempo event
+                        byte[] data = mm.getData();
+                        if (data.length == 3) {
+                            int mspqn = ((data[0] & 0xff) << 16) | ((data[1] & 0xff) << 8) | (data[2] & 0xff);
+                            tempo = 60000000.0f / mspqn;
+                            tempoFound = true; // Only use the first tempo event found
+                        }
+                    }
                 }
             }
-            // If we found notes in this track, break (simple single track handling)
-            // if (!notes.isEmpty()) break;
         }
         // Ensure totalTicks covers at least a few measures if no notes or very short sequence
         if (maxTick < (long)ppqn * 4 * 4) { // at least 4 measures
@@ -65,7 +74,7 @@ public class MidiHandler {
         }
 
 
-        return new MidiData(notes, ppqn, maxTick);
+        return new MidiData(notes, ppqn, maxTick, tempo);
     }
 
     private static long findNoteOffDuration(Track track, int startIndex, int channel, int pitch, long noteOnTick) {
@@ -84,9 +93,23 @@ public class MidiHandler {
         return 0; // Should not happen in a well-formed MIDI file
     }
 
-    public static void saveMidiFile(File file, List<Note> notes, int ppqn) throws InvalidMidiDataException, IOException {
+    public static void saveMidiFile(File file, List<Note> notes, int ppqn, float tempo) throws InvalidMidiDataException, IOException {
         Sequence sequence = new Sequence(Sequence.PPQ, ppqn);
         Track track = sequence.createTrack();
+
+        // Add tempo event at the beginning of the track
+        try {
+            MetaMessage tempoMessage = new MetaMessage();
+            int mspqn = (int)(60000000 / tempo);
+            byte[] data = new byte[3];
+            data[0] = (byte)((mspqn >> 16) & 0xff);
+            data[1] = (byte)((mspqn >> 8) & 0xff);
+            data[2] = (byte)(mspqn & 0xff);
+            tempoMessage.setMessage(0x51, data, data.length);
+            track.add(new MidiEvent(tempoMessage, 0));
+        } catch (InvalidMidiDataException e) {
+            System.err.println("Error creating tempo event: " + e.getMessage());
+        }
 
         for (Note note : notes) {
             try {
@@ -112,16 +135,18 @@ public class MidiHandler {
         if (ppqn == 0) ppqn = DEFAULT_PPQN;
 
         long maxTick = 0;
+        float tempo = 120.0f; // Default tempo
+        boolean tempoFound = false;
 
         for (Track track : sequence.getTracks()) {
             for (int i = 0; i < track.size(); i++) {
                 MidiEvent event = track.get(i);
                 MidiMessage message = event.getMessage();
+                long tick = event.getTick();
+                if (tick > maxTick) maxTick = tick;
+
                 if (message instanceof ShortMessage) {
                     ShortMessage sm = (ShortMessage) message;
-                    long tick = event.getTick();
-                    if (tick > maxTick) maxTick = tick;
-
                     if (sm.getCommand() == ShortMessage.NOTE_ON && sm.getData2() > 0) {
                         int pitch = sm.getData1();
                         int velocity = sm.getData2();
@@ -132,6 +157,16 @@ public class MidiHandler {
                             if (tick + durationTicks > maxTick) maxTick = tick + durationTicks;
                         }
                     }
+                } else if (message instanceof MetaMessage) {
+                    MetaMessage mm = (MetaMessage) message;
+                    if (mm.getType() == 0x51 && !tempoFound) { // Tempo event
+                        byte[] data = mm.getData();
+                        if (data.length == 3) {
+                            int mspqn = ((data[0] & 0xff) << 16) | ((data[1] & 0xff) << 8) | (data[2] & 0xff);
+                            tempo = 60000000.0f / mspqn;
+                            tempoFound = true; // Only use the first tempo event found
+                        }
+                    }
                 }
             }
         }
@@ -140,6 +175,6 @@ public class MidiHandler {
             maxTick = (long)ppqn * 4 * 8;
         }
 
-        return new MidiData(notes, ppqn, maxTick);
+        return new MidiData(notes, ppqn, maxTick, tempo);
     }
 }

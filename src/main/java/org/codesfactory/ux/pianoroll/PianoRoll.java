@@ -1,4 +1,4 @@
-// PianoRoll.java (Corrected version 2)
+// PianoRoll.java (with tempo controls)
 
 package org.codesfactory.ux.pianoroll;
 
@@ -35,6 +35,7 @@ public class PianoRoll extends JFrame {
     private JMenuItem deleteAllItem;
     private JTextField loopStartField;
     private JTextField loopEndField;
+    private JTextField tempoField; // Added
 
     // --- MozartAPI Fields ---
     private final MozartAPIClient mozartAPIClient;
@@ -98,6 +99,7 @@ public class PianoRoll extends JFrame {
         // Final setup
         updateUndoRedoMenuItems(false, false);
         updateLoopButtonText(); // Initialize loop fields
+        updateTempoField(); // Initialize tempo field
         loadModels();
     }
 
@@ -182,12 +184,21 @@ public class PianoRoll extends JFrame {
         stopButton.addActionListener(e -> playbackManager.stop());
         toolBar.add(stopButton);
 
+        toolBar.add(Box.createHorizontalStrut(10));
+        toolBar.add(new JLabel("Tempo:"));
+        toolBar.add(Box.createHorizontalStrut(5));
+        tempoField = new JTextField(5);
+        tempoField.setMaximumSize(new Dimension(60, 24));
+        tempoField.setToolTipText("Set Tempo (BPM) and press Enter");
+        tempoField.addActionListener(e -> updateTempoFromField());
+        toolBar.add(tempoField);
         toolBar.add(Box.createHorizontalStrut(15));
-        toolBar.add(new JLabel("Loop Range:"));
+
+        toolBar.add(new JLabel("Range (Measures):"));
         toolBar.add(Box.createHorizontalStrut(5));
 
-        loopStartField = new JTextField(8);
-        loopStartField.setToolTipText("Loop Start Tick (Press Enter to apply)");
+        loopStartField = new JTextField(5);
+        loopStartField.setToolTipText("Start Measure (Press Enter to set loop)");
         loopStartField.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(loopStartField);
 
@@ -195,16 +206,22 @@ public class PianoRoll extends JFrame {
         toolBar.add(new JLabel("-"));
         toolBar.add(Box.createHorizontalStrut(5));
 
-        loopEndField = new JTextField(8);
-        loopEndField.setToolTipText("Loop End Tick (Press Enter to apply)");
+        loopEndField = new JTextField(5);
+        loopEndField.setToolTipText("End Measure (Press Enter to set loop)");
         loopEndField.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(loopEndField);
 
         toolBar.add(Box.createHorizontalStrut(5));
-        JButton setLoopButton = new JButton("Set");
-        setLoopButton.setToolTipText("Apply new loop range");
+        JButton setLoopButton = new JButton("Set Loop");
+        setLoopButton.setToolTipText("Apply new loop range based on measures");
         setLoopButton.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(setLoopButton);
+
+        toolBar.add(Box.createHorizontalStrut(5));
+        JButton selectButton = new JButton("Select");
+        selectButton.setToolTipText("Select notes in the specified measure range");
+        selectButton.addActionListener(e -> selectNotesByMeasureRange());
+        toolBar.add(selectButton);
 
         // --- Right Group ---
         toolBar.add(Box.createHorizontalGlue());
@@ -333,10 +350,46 @@ public class PianoRoll extends JFrame {
         });
     }
 
+    private void selectNotesByMeasureRange() {
+        try {
+            int startMeasure = Integer.parseInt(loopStartField.getText());
+            int endMeasure = Integer.parseInt(loopEndField.getText());
+
+            if (startMeasure <= 0 || endMeasure <= 0 || startMeasure > endMeasure) {
+                JOptionPane.showMessageDialog(this, "Invalid measure range.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            int ppqn = pianoRollView.getPpqn();
+            int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
+            int ticksPerMeasure = ppqn * beatsPerMeasure;
+
+            long startTick = (long)(startMeasure - 1) * ticksPerMeasure;
+            long endTick = (long)endMeasure * ticksPerMeasure;
+
+            pianoRollView.selectNotesInRange(startTick, endTick);
+
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "Invalid measure value. Please enter numbers only.", "Input Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
     private void updateLoopRangeFromFields() {
         try {
-            long startTick = Long.parseLong(loopStartField.getText());
-            long endTick = Long.parseLong(loopEndField.getText());
+            int startMeasure = Integer.parseInt(loopStartField.getText());
+            int endMeasure = Integer.parseInt(loopEndField.getText());
+
+            if (startMeasure <= 0 || endMeasure <= 0 || startMeasure > endMeasure) {
+                JOptionPane.showMessageDialog(this, "Invalid measure range.", "Input Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            int ppqn = pianoRollView.getPpqn();
+            int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
+            int ticksPerMeasure = ppqn * beatsPerMeasure;
+
+            long startTick = (long)(startMeasure - 1) * ticksPerMeasure;
+            long endTick = (long)endMeasure * ticksPerMeasure;
 
             pianoRollView.setLoopRange(startTick, endTick);
 
@@ -345,7 +398,7 @@ public class PianoRoll extends JFrame {
             }
             updateLoopButtonText(); // Sync UI
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Invalid tick value. Please enter numbers only.", "Input Error", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Invalid measure value. Please enter numbers only.", "Input Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -355,8 +408,49 @@ public class PianoRoll extends JFrame {
                 loopButton.setSelected(pianoRollView.isLoopRangeVisible());
             }
             if (loopStartField != null && loopEndField != null && pianoRollView != null) {
-                loopStartField.setText(String.valueOf(pianoRollView.getLoopStartTick()));
-                loopEndField.setText(String.valueOf(pianoRollView.getLoopEndTick()));
+                // Convert ticks back to measures
+                int ppqn = pianoRollView.getPpqn();
+                int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
+                if (ppqn > 0 && beatsPerMeasure > 0) {
+                    int ticksPerMeasure = ppqn * beatsPerMeasure;
+                    long startTick = pianoRollView.getLoopStartTick();
+                    long endTick = pianoRollView.getLoopEndTick();
+
+                    int startMeasure = (int)(startTick / ticksPerMeasure) + 1;
+                    long lastTickInRange = (endTick > 0) ? endTick - 1 : 0;
+                    int endMeasure = (int)(lastTickInRange / ticksPerMeasure) + 1;
+
+                    loopStartField.setText(String.valueOf(startMeasure));
+                    loopEndField.setText(String.valueOf(endMeasure));
+
+                } else {
+                    // Fallback to ticks if timing info is not ready
+                    loopStartField.setText(String.valueOf(pianoRollView.getLoopStartTick()));
+                    loopEndField.setText(String.valueOf(pianoRollView.getLoopEndTick()));
+                }
+            }
+        });
+    }
+
+    private void updateTempoFromField() {
+        try {
+            float tempo = Float.parseFloat(tempoField.getText());
+            if (tempo > 0) {
+                playbackManager.setTempo(tempo);
+            } else {
+                JOptionPane.showMessageDialog(this, "Tempo must be a positive number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+            }
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "Invalid tempo value. Please enter a number.", "Input Error", JOptionPane.ERROR_MESSAGE);
+        }
+        // Update the field to show the actual current tempo, in case the input was invalid or adjusted
+        updateTempoField();
+    }
+
+    private void updateTempoField() {
+        SwingUtilities.invokeLater(() -> {
+            if (tempoField != null) {
+                tempoField.setText(String.format("%.1f", playbackManager.getTempo()));
             }
         });
     }
@@ -390,6 +484,8 @@ public class PianoRoll extends JFrame {
                 MidiHandler.MidiData midiData = MidiHandler.loadMidiFile(file);
                 pianoRollView.loadNotes(midiData.notes, midiData.ppqn, midiData.totalTicks);
                 playbackManager.loadNotes(pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+                playbackManager.setTempo(midiData.tempo);
+                updateTempoField();
                 currentFile = file;
                 setTitle("COMPASS - " + file.getName());
             } catch (Exception ex) {
@@ -419,7 +515,7 @@ public class PianoRoll extends JFrame {
                 if (response != JOptionPane.YES_OPTION) return;
             }
             try {
-                MidiHandler.saveMidiFile(file, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+                MidiHandler.saveMidiFile(file, pianoRollView.getAllNotes(), pianoRollView.getPpqn(), playbackManager.getTempo());
                 currentFile = file;
                 setTitle("COMPASS - " + file.getName());
                 JOptionPane.showMessageDialog(this, "MIDI file saved as " + file.getName(), "Save Successful", JOptionPane.INFORMATION_MESSAGE);
@@ -437,7 +533,7 @@ public class PianoRoll extends JFrame {
         }
         if (playbackManager.isPlaying()) playbackManager.stop();
         try {
-            MidiHandler.saveMidiFile(currentFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+            MidiHandler.saveMidiFile(currentFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn(), playbackManager.getTempo());
             System.out.println("File saved to " + currentFile.getPath());
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(this, "Error saving MIDI file: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
@@ -503,7 +599,7 @@ public class PianoRoll extends JFrame {
             protected MidiHandler.MidiData doInBackground() throws Exception {
                 File tempMidiFile = File.createTempFile("compass-generate-", ".mid");
                 try {
-                    MidiHandler.saveMidiFile(tempMidiFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+                    MidiHandler.saveMidiFile(tempMidiFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn(), playbackManager.getTempo());
                     String modelType = selectedModel.getModelName();
                     int tempo = (int) playbackManager.getTempo();
                     GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList(56), tempo, "generate");
@@ -519,6 +615,8 @@ public class PianoRoll extends JFrame {
                 try {
                     MidiHandler.MidiData generatedData = get();
                     pianoRollView.loadNotes(generatedData.notes, generatedData.ppqn, generatedData.totalTicks);
+                    playbackManager.setTempo(generatedData.tempo);
+                    updateTempoField();
                     infoLabel.setText("Music generation complete.");
                 } catch (Exception e) {
                     e.printStackTrace();
