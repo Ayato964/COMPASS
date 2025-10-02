@@ -11,6 +11,7 @@ import java.awt.geom.Path2D;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 public class PianoRollView extends JPanel implements MouseListener, MouseMotionListener, MouseWheelListener, KeyListener {
 
@@ -300,6 +301,34 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
             // if (parentFrame != null) parentFrame.updateUndoRedoMenuItems(false, false);
             // --- ここまで ---
         }
+    }
+
+    public void replaceNotesFrom(long startTick, List<Note> generatedNotes) {
+        // Find notes to delete from the live list
+        List<Note> notesToDelete = this.notes.stream()
+                .filter(n -> n.getStartTimeTicks() >= startTick)
+                .collect(Collectors.toList());
+
+        // Shift new notes to the start tick
+        List<Note> newNotes = new ArrayList<>();
+        for (Note note : generatedNotes) {
+            newNotes.add(new Note(
+                    note.getPitch(),
+                    note.getStartTimeTicks() + startTick,
+                    note.getDurationTicks(),
+                    note.getVelocity(),
+                    note.getChannel()
+            ));
+        }
+
+        // Create and execute the replacement as a single command on the live list
+        ReplaceNotesCommand command = new ReplaceNotesCommand(
+                this,
+                this.notes, // Pass the live list
+                notesToDelete,
+                newNotes
+        );
+        this.undoManager.executeCommand(command);
     }
 
     // --- Loop Range Methods ---

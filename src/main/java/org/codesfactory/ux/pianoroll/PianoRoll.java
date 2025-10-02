@@ -3,21 +3,26 @@
 package org.codesfactory.ux.pianoroll;
 
 import com.formdev.flatlaf.FlatDarkLaf;
+import com.google.gson.Gson;
 import org.codesfactory.api.GenerateMeta;
 import org.codesfactory.api.ModelInfo;
 import org.codesfactory.api.MozartAPIClient;
+import org.codesfactory.ux.pianoroll.commands.ReplaceNotesCommand;
 
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class PianoRoll extends JFrame {
 
@@ -591,22 +596,136 @@ public class PianoRoll extends JFrame {
             return;
         }
 
+        // --- Get Measure Range and Ticks from Toolbar ---
+        int startMeasure;
+        int endMeasure;
+        long startTick;
+        long endTick;
+        try {
+            startMeasure = Integer.parseInt(loopStartField.getText());
+            endMeasure = Integer.parseInt(loopEndField.getText());
+
+            if (startMeasure <= 0 || endMeasure <= 0 || startMeasure > endMeasure) {
+                JOptionPane.showMessageDialog(this, "ツールバーの小節範囲が正しくありません。", "範囲エラー", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            int ppqn = pianoRollView.getPpqn();
+            int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
+            int ticksPerMeasure = ppqn * beatsPerMeasure;
+            // Calculate the original start tick based on the user's input
+            long originalStartTick = (long)(startMeasure - 1) * ticksPerMeasure;
+            // Adjust the start tick to be one measure earlier, ensuring it's not negative
+            startTick = Math.max(0, originalStartTick - ticksPerMeasure);
+            endTick = (long)endMeasure * ticksPerMeasure;
+
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(this, "ツールバーの小節範囲に数値を入力してください。", "入力エラー", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        // --- End of Get Range ---
+
+
+        // --- Parameter Input Dialog ---
+        JPanel panel = new JPanel(new GridLayout(0, 2, 5, 5));
+        JSpinner pSpinner = new JSpinner(new SpinnerNumberModel(0.95, 0.0, 1.0, 0.01));
+        JSpinner tempSpinner = new JSpinner(new SpinnerNumberModel(1.0, 0.1, 2.0, 0.1));
+
+        panel.add(new JLabel("p (Nucleus Sampling):"));
+        panel.add(pSpinner);
+        panel.add(new JLabel("Temperature:"));
+        panel.add(tempSpinner);
+
+        int result = JOptionPane.showConfirmDialog(this, panel, "Generation Parameters", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION) {
+            return; // User cancelled
+        }
+
+        double pValue = (Double) pSpinner.getValue();
+        double tempValue = (Double) tempSpinner.getValue();
+        // --- End of Dialog ---
+
         generateButton.setEnabled(false);
         infoLabel.setText("Generating music with " + selectedModel.getModelName() + "...");
+        System.out.println("generateMusic: Starting GenerationWorker...");
 
-        SwingWorker<MidiHandler.MidiData, Void> worker = new SwingWorker<>() {
+        class GenerationWorker extends SwingWorker<MidiHandler.MidiData, Void> {
+            private final ModelInfo model;
+            private final long workerStartTick;
+            private final long workerEndTick;
+
+            public GenerationWorker(ModelInfo model, long startTick, long endTick) {
+                this.model = model;
+                this.workerStartTick = startTick;
+                this.workerEndTick = endTick;
+            }
+
             @Override
             protected MidiHandler.MidiData doInBackground() throws Exception {
+                System.out.println("GenerationWorker: doInBackground started.");
                 File tempMidiFile = File.createTempFile("compass-generate-", ".mid");
+                File tempMetaFile = File.createTempFile("compass-meta-", ".json");
                 try {
-                    MidiHandler.saveMidiFile(tempMidiFile, pianoRollView.getAllNotes(), pianoRollView.getPpqn(), playbackManager.getTempo());
-                    String modelType = selectedModel.getModelName();
+                    System.out.println("GenerationWorker: Temporary files created.");
+
+                    // --- Filter notes based on measure range (using worker's ticks) ---
+                    List<Note> allNotes = pianoRollView.getAllNotes();
+                    List<Note> notesInRange = allNotes.stream()
+                            .filter(n -> n.getStartTimeTicks() >= this.workerStartTick && n.getStartTimeTicks() < this.workerEndTick)
+                            .collect(Collectors.toList());
+
+                    System.out.println("GenerationWorker: Found " + notesInRange.size() + " notes in measure range.");
+
+                    // Save only the notes in the specified range
+                    MidiHandler.saveMidiFile(tempMidiFile, notesInRange, pianoRollView.getPpqn(), playbackManager.getTempo());
+                    System.out.println("GenerationWorker: Temp MIDI file saved with notes in range.");
+
+
+                    String modelType = model.getModelName();
                     int tempo = (int) playbackManager.getTempo();
-                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList(56), tempo, "generate");
-                    byte[] generatedMidiBytes = mozartAPIClient.generate(tempMidiFile, meta);
-                    return MidiHandler.loadMidiFromBytes(generatedMidiBytes);
+
+                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList(0), tempo, "MELODY_GEM");
+                    meta.setP(pValue);
+                    meta.setTemperature(tempValue);
+
+                    try (FileWriter writer = new FileWriter(tempMetaFile)) {
+                        new Gson().toJson(meta, writer);
+                    }
+                    System.out.println("GenerationWorker: Temp meta JSON file saved.");
+
+                    System.out.println("GenerationWorker: Calling API client...");
+                    byte[] responseBytes = mozartAPIClient.generate(tempMidiFile, tempMetaFile);
+                    System.out.println("GenerationWorker: API client returned.");
+
+                    byte[] midiBytes;
+
+                    // Check if the response is a ZIP file (PK header)
+                    if (responseBytes.length > 2 && responseBytes[0] == 0x50 && responseBytes[1] == 0x4B) {
+                        System.out.println("GenerationWorker: ZIP file detected. Unzipping...");
+                        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(responseBytes))) {
+                            ZipEntry zipEntry = zis.getNextEntry();
+                            midiBytes = null;
+                            while (zipEntry != null) {
+                                if (!zipEntry.isDirectory() && (zipEntry.getName().toLowerCase().endsWith(".mid") || zipEntry.getName().toLowerCase().endsWith(".midi"))) {
+                                    midiBytes = zis.readAllBytes();
+                                    System.out.println("GenerationWorker: Found MIDI file in ZIP: " + zipEntry.getName());
+                                    break;
+                                }
+                                zipEntry = zis.getNextEntry();
+                            }
+                            if (midiBytes == null) {
+                                throw new IOException("No MIDI file found in the generated ZIP archive.");
+                            }
+                        }
+                    } else {
+                        System.out.println("GenerationWorker: Assuming raw MIDI data.");
+                        midiBytes = responseBytes;
+                    }
+                    return MidiHandler.loadMidiFromBytes(midiBytes);
                 } finally {
+                    System.out.println("GenerationWorker: Deleting temporary files.");
                     tempMidiFile.delete();
+                    tempMetaFile.delete();
                 }
             }
 
@@ -614,19 +733,32 @@ public class PianoRoll extends JFrame {
             protected void done() {
                 try {
                     MidiHandler.MidiData generatedData = get();
-                    pianoRollView.loadNotes(generatedData.notes, generatedData.ppqn, generatedData.totalTicks);
-                    playbackManager.setTempo(generatedData.tempo);
+                    System.out.println("GenerationWorker: done() method finished successfully.");
+
+                    // Call the method in PianoRollView to handle the note replacement
+                    pianoRollView.replaceNotesFrom(this.workerStartTick, generatedData.notes);
+
+                    // IMPORTANT: Force the playback manager to reload the updated notes
+                    playbackManager.loadNotes(pianoRollView.getAllNotes(), pianoRollView.getPpqn());
+
+                    // Update tempo and UI
+                    // playbackManager.setTempo(generatedData.tempo); // Don't update tempo from generated file, as it might be incorrect.
                     updateTempoField();
                     infoLabel.setText("Music generation complete.");
+                    System.out.println("GenerationWorker: Note replacement and UI updates are complete.");
+
                 } catch (Exception e) {
+                    System.err.println("GenerationWorker: Error in done() method: " + e.getMessage());
                     e.printStackTrace();
                     infoLabel.setText("Error during music generation.");
                     JOptionPane.showMessageDialog(PianoRoll.this, "Failed to generate music: " + e.getMessage(), "Generation Error", JOptionPane.ERROR_MESSAGE);
+                } finally {
+                    generateButton.setEnabled(true);
                 }
-                generateButton.setEnabled(true);
             }
-        };
-        worker.execute();
+        }
+
+        new GenerationWorker(selectedModel, startTick, endTick).execute();
     }
 
     // --- Utility ---
