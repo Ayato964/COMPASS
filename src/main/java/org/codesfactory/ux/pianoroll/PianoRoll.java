@@ -14,6 +14,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.ActionListener;
 import java.io.*;
 import java.text.MessageFormat;
 import java.util.ArrayList;
@@ -199,6 +200,38 @@ public class PianoRoll extends JFrame {
         toolBar.add(tempoField);
         toolBar.add(Box.createHorizontalStrut(15));
 
+        // --- Quantize & Time Signature UI ---
+        toolBar.add(new JLabel("Quantize:"));
+        toolBar.add(Box.createHorizontalStrut(5));
+        String[] quantizeOptions = {"1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"};
+        JComboBox<String> quantizeComboBox = new JComboBox<>(quantizeOptions);
+        quantizeComboBox.setSelectedItem("1/16");
+        quantizeComboBox.setMaximumSize(new Dimension(80, 24));
+        toolBar.add(quantizeComboBox);
+
+        toolBar.add(Box.createHorizontalStrut(5));
+        JCheckBox tripletCheckBox = new JCheckBox("3連符");
+        toolBar.add(tripletCheckBox);
+
+        ActionListener quantizeListener = e -> {
+            updateQuantize(quantizeComboBox.getSelectedItem().toString(), tripletCheckBox.isSelected());
+        };
+        quantizeComboBox.addActionListener(quantizeListener);
+        tripletCheckBox.addActionListener(quantizeListener);
+
+        toolBar.add(Box.createHorizontalStrut(10));
+        toolBar.add(new JLabel("Time Sig:"));
+        toolBar.add(Box.createHorizontalStrut(5));
+        String[] timeSigOptions = {"4/4", "3/4"};
+        JComboBox<String> timeSigComboBox = new JComboBox<>(timeSigOptions);
+        timeSigComboBox.setSelectedItem("4/4");
+        timeSigComboBox.setMaximumSize(new Dimension(70, 24));
+        timeSigComboBox.addActionListener(e -> {
+            updateTimeSignature(timeSigComboBox.getSelectedItem().toString());
+        });
+        toolBar.add(timeSigComboBox);
+        toolBar.add(Box.createHorizontalStrut(15));
+
         toolBar.add(new JLabel("Range (Measures):"));
         toolBar.add(Box.createHorizontalStrut(5));
 
@@ -319,10 +352,8 @@ public class PianoRoll extends JFrame {
                 return;
             }
 
-            // Load notes only if the sequence is not already set
-            if (playbackManager.getSequence() == null) { // A way to check if notes are loaded
-                playbackManager.loadNotes(notesForPlayback, pianoRollView.getPpqn());
-            }
+            // Always load the latest notes before playing
+            playbackManager.loadNotes(notesForPlayback, pianoRollView.getPpqn());
 
             if (pianoRollView.isLoopRangeVisible()) {
                 playbackManager.setLoop(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
@@ -458,6 +489,32 @@ public class PianoRoll extends JFrame {
                 tempoField.setText(String.format("%.1f", playbackManager.getTempo()));
             }
         });
+    }
+
+    private void updateQuantize(String divisionStr, boolean isTriplet) {
+        if (pianoRollView != null) {
+            int division = 16;
+            switch (divisionStr) {
+                case "1/1": division = 1; break;
+                case "1/2": division = 2; break;
+                case "1/4": division = 4; break;
+                case "1/8": division = 8; break;
+                case "1/16": division = 16; break;
+                case "1/32": division = 32; break;
+                case "1/64": division = 64; break;
+            }
+            pianoRollView.setQuantize(division, isTriplet);
+        }
+    }
+
+    private void updateTimeSignature(String sigStr) {
+        if (pianoRollView != null) {
+            int beats = 4;
+            if ("3/4".equals(sigStr)) {
+                beats = 3;
+            }
+            pianoRollView.setBeatsPerMeasure(beats);
+        }
     }
 
     public void updateNoteInfo(Note note) {
@@ -767,6 +824,10 @@ public class PianoRoll extends JFrame {
         if (midiNoteNumber < 0 || midiNoteNumber > 127) return "N/A";
         int octave = (midiNoteNumber / 12) - 1;
         return PITCH_NAMES[midiNoteNumber % 12] + octave;
+    }
+
+    public PlaybackManager getPlaybackManager() {
+        return this.playbackManager;
     }
 
     // --- Window Closing Logic ---

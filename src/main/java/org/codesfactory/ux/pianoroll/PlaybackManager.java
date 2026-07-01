@@ -8,6 +8,7 @@ public class PlaybackManager {
 
     private Sequencer sequencer;
     private Sequence sequence;
+    private Synthesizer synthesizer;
     private final PianoRollView pianoRollView;
     private Thread playbackHeadUpdaterThread;
     private boolean isLoopingEnabled = false; // ★★★ ループ状態を管理するフラグを追加 ★★★
@@ -28,7 +29,7 @@ public class PlaybackManager {
             sequencer.open();
 
             // Explicitly connect the sequencer to a synthesizer
-            Synthesizer synthesizer = MidiSystem.getSynthesizer();
+            synthesizer = MidiSystem.getSynthesizer();
             synthesizer.open();
             Receiver receiver = synthesizer.getReceiver();
             Transmitter transmitter = sequencer.getTransmitter();
@@ -146,6 +147,7 @@ public class PlaybackManager {
     public void pause() {
         if (sequencer != null && sequencer.isRunning()) {
             sequencer.stop(); // This effectively pauses playback
+            allNotesOff();
             stopPlaybackHeadUpdaterThread();
             if (pianoRollView != null) {
                 pianoRollView.updateParentPlayButtonState(false);
@@ -163,6 +165,7 @@ public class PlaybackManager {
             sequencer.stop();
             System.out.println("PlaybackManager: Sequencer stopped.");
         }
+        allNotesOff();
         // 再生ヘッド更新スレッドが動いていれば停止を待つ
         if (playbackHeadUpdaterThread != null && playbackHeadUpdaterThread.isAlive()) {
             try {
@@ -339,6 +342,50 @@ public class PlaybackManager {
         if (sequencer != null && sequencer.isOpen()) {
             sequencer.close();
             System.out.println("PlaybackManager: Sequencer closed.");
+        }
+        if (synthesizer != null && synthesizer.isOpen()) {
+            synthesizer.close();
+        }
+    }
+
+    public void playNotePreview(int pitch) {
+        if (synthesizer != null && synthesizer.isOpen()) {
+            try {
+                MidiChannel[] channels = synthesizer.getChannels();
+                if (channels != null && channels.length > 0) {
+                    channels[0].noteOn(pitch, 100);
+                    new Thread(() -> {
+                        try {
+                            Thread.sleep(200);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        if (synthesizer != null && synthesizer.isOpen()) {
+                            channels[0].noteOff(pitch);
+                        }
+                    }).start();
+                }
+            } catch (Exception e) {
+                System.err.println("Error playing preview note: " + e.getMessage());
+            }
+        }
+    }
+
+    public void allNotesOff() {
+        if (synthesizer != null && synthesizer.isOpen()) {
+            try {
+                MidiChannel[] channels = synthesizer.getChannels();
+                if (channels != null) {
+                    for (MidiChannel channel : channels) {
+                        if (channel != null) {
+                            channel.allNotesOff();
+                            channel.allSoundOff();
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error sending allNotesOff: " + e.getMessage());
+            }
         }
     }
 }

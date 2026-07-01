@@ -75,6 +75,10 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private long loopStartTick = 0;
     private long loopEndTick = (long) ppqn * beatsPerMeasure * 4;
 
+    // --- Quantize Settings ---
+    private int quantizeDivision = 16;
+    private boolean quantizeTriplet = false;
+
     // --- Other ---
     private final PianoRoll parentFrame; // 親フレームへの参照 (final)
     private final UndoManager undoManager; // Undo/Redo マネージャ (final)
@@ -94,7 +98,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         updatePreferredSize();
 
         // 長押し判定タイマー初期化
-        longPressTimer = new Timer(LONG_PRESS_DELAY, _ -> {
+        longPressTimer = new Timer(LONG_PRESS_DELAY, e -> {
             // タイマーが発火した = 長押しが確定した
             isLongPress = true;
             System.out.println("Long press timer fired! Mode: PITCH_ONLY");
@@ -118,6 +122,21 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     public PianoRoll getParentFrame() {
         return this.parentFrame;
+    }
+
+    public void setQuantize(int division, boolean triplet) {
+        this.quantizeDivision = division;
+        this.quantizeTriplet = triplet;
+        repaint();
+    }
+    public int getQuantizeDivision() { return this.quantizeDivision; }
+    public boolean isQuantizeTriplet() { return this.quantizeTriplet; }
+
+    public void setBeatsPerMeasure(int beats) {
+        this.beatsPerMeasure = beats;
+        this.loopEndTick = (long) ppqn * beatsPerMeasure * 4;
+        updatePreferredSize();
+        repaint();
     }
 
 //    public double getPixelsPerTickSafe() {
@@ -422,10 +441,12 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     private long snapToGrid(long tick, int snapDivision) {
         if (snapDivision <= 0 || ppqn <= 0 || beatUnit <= 0) return tick; // Avoid division by zero
-        // Calculate ticks per snap unit (e.g., 16th note)
-        long ticksPerBeat = (long)ppqn * 4 / beatUnit;
-        long ticksPerSnap = ticksPerBeat / (snapDivision / 4); // Assumes snapDivision is based on quarter notes (4=quarter, 8=eighth, 16=sixteenth)
-        if (ticksPerSnap <= 0) return tick; // Avoid division by zero if snap is too fine
+        long ticksPerBeat = (long) ppqn * 4 / beatUnit;
+        long ticksPerSnap = (ticksPerBeat * 4) / snapDivision;
+        if (quantizeTriplet && snapDivision == this.quantizeDivision) {
+            ticksPerSnap = (ticksPerSnap * 2) / 3;
+        }
+        if (ticksPerSnap <= 0) return tick;
         return (Math.round((double) tick / ticksPerSnap)) * ticksPerSnap;
     }
 
@@ -619,14 +640,34 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         long endTick = xToTick(clip.x + clip.width) + ticksPerBeat;
         endTick = Math.min(endTick, totalTicks);
 
-        for (long currentTick = 0; currentTick <= endTick; currentTick += ticksPerBeat / 4) { // 16th note grid
+        // Calculate snap interval based on quantize division
+        long ticksPerQuantize = (ticksPerBeat * 4) / quantizeDivision;
+        if (quantizeTriplet) {
+            ticksPerQuantize = (ticksPerQuantize * 2) / 3;
+        }
+        if (ticksPerQuantize <= 0) ticksPerQuantize = 120;
+
+        double pixelsPerQuantize = ticksPerQuantize * pixelsPerTick;
+
+        for (long currentTick = 0; currentTick <= endTick; currentTick += ticksPerQuantize) {
             int x = tickToX(currentTick);
             if (x < KEY_WIDTH || x < clip.x || x > clip.x + clip.width) continue;
 
-            if (currentTick % ticksPerMeasure == 0) g2d.setColor(GRID_LINE_COLOR_LIGHT);
-            else if (currentTick % ticksPerBeat == 0) g2d.setColor(GRID_LINE_COLOR_DARK);
-            else if (pixelsPerTick * (ticksPerBeat / 4.0) > 3) g2d.setColor(GRID_LINE_COLOR_DARK.darker());
-            else continue; // Too dense to draw
+            if (currentTick % ticksPerMeasure == 0) {
+                g2d.setColor(GRID_LINE_COLOR_LIGHT);
+            } else if (currentTick % ticksPerBeat == 0) {
+                if (ticksPerBeat * pixelsPerTick >= 5) {
+                    g2d.setColor(GRID_LINE_COLOR_DARK);
+                } else {
+                    continue; // Skip beat line if too dense
+                }
+            } else {
+                if (pixelsPerQuantize >= 8) {
+                    g2d.setColor(GRID_LINE_COLOR_DARK.darker());
+                } else {
+                    continue; // Skip quantize line if too dense (implements adaptive zoom visibility)
+                }
+            }
             g2d.drawLine(x, gridTopY, x, gridBottomY);
         }
 
@@ -765,77 +806,59 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 int pitch = yToPitch(e.getY());
                 if (pitch != -1) {
                     System.out.println("Piano key clicked (Audition): " + pitch);
-                    // TODO: Audition 機能実装
+                    // Audition
+                    if (parentFrame != null && parentFrame.getPlaybackManager() != null) {
+                        parentFrame.getPlaybackManager().playNotePreview(pitch);
+                    }
                 }
             } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 // ノートエリアクリック
                 Optional<Note> clickedNoteOpt = getNoteAt(e.getX(), e.getY());
 
                 if (!clickedNoteOpt.isPresent()) {
-                    // 空白部分クリック -> 新規ノート作成
-                    System.out.println("mouseClicked: Empty space in note area clicked. Attempting to create note.");
-                    int pitch = yToPitch(e.getY());
-                    long startTime = snapToGrid(xToTick(e.getX()), 16);
-                    long duration = this.ppqn; // 1拍の長さ
+                    if (e.getClickCount() == 2) {
+                        // 空白部分ダブルクリック -> 新規ノート作成
+                        System.out.println("mouseClicked: Empty space in note area double-clicked. Attempting to create note.");
+                        int pitch = yToPitch(e.getY());
+                        long startTime = snapToGrid(xToTick(e.getX()), this.quantizeDivision);
+                        
+                        // Calculate note duration adaptive to quantize division
+                        long duration = (quantizeTriplet) ? ((this.ppqn * 4 / this.quantizeDivision * 2) / 3) : (this.ppqn * 4 / this.quantizeDivision); 
+                        if (duration <= 0) duration = this.ppqn;
 
-                    System.out.println(String.format("  Create params: pitch=%d, startTime=%d, duration=%d (ppqn=%d)",
-                            pitch, startTime, duration, this.ppqn));
+                        System.out.println(String.format("  Create params: pitch=%d, startTime=%d, duration=%d (ppqn=%d)",
+                                pitch, startTime, duration, this.ppqn));
 
-                    if (pitch != -1) {
-                        Note newNote = new Note(pitch, startTime, duration, 100, 0);
-                        System.out.println("mouseClicked: Creating AddNoteCommand with notes hash=" + System.identityHashCode(this.notes));
-                        AddNoteCommand addCmd = new AddNoteCommand(this, this.notes, newNote);
-                        undoManager.executeCommand(addCmd); // コマンド経由で追加・選択・情報更新
-                        System.out.println("  AddNoteCommand executed for new note.");
+                        if (pitch != -1) {
+                            Note newNote = new Note(pitch, startTime, duration, 100, 0);
+                            System.out.println("mouseClicked: Creating AddNoteCommand with notes hash=" + System.identityHashCode(this.notes));
+                            AddNoteCommand addCmd = new AddNoteCommand(this, this.notes, newNote);
+                            undoManager.executeCommand(addCmd); // コマンド経由で追加・選択・情報更新
+                            System.out.println("  AddNoteCommand executed for new note.");
 
-                        if (startTime + duration > totalTicks) {
-                            totalTicks = startTime + duration + (long) this.ppqn * 4;
-                            updatePreferredSize();
-                            System.out.println("  Total ticks updated to: " + totalTicks);
+                            // Audition
+                            if (parentFrame != null && parentFrame.getPlaybackManager() != null) {
+                                parentFrame.getPlaybackManager().playNotePreview(pitch);
+                            }
+
+                            if (startTime + duration > totalTicks) {
+                                totalTicks = startTime + duration + (long) this.ppqn * 4;
+                                updatePreferredSize();
+                                System.out.println("  Total ticks updated to: " + totalTicks);
+                            }
+                        } else {
+                            System.out.println("  Note creation skipped: Invalid pitch.");
                         }
-                    } else {
-                        System.out.println("  Note creation skipped: Invalid pitch.");
+                    } else if (e.getClickCount() == 1) {
+                        // 空白部分シングルクリック -> 再生バーをその位置に移動
+                        long clickedTick = snapToGrid(xToTick(e.getX()), this.quantizeDivision);
+                        if (parentFrame != null) {
+                            parentFrame.setPlaybackTickPosition(clickedTick);
+                        }
                     }
                 } else {
                     // 既存ノートクリック
                     System.out.println("Existing note clicked. Selection primarily handled by mousePressed. Note: " + clickedNoteOpt.get());
-                    // ダブルクリックなどの処理をここに追加可能
-                }
-            } else if (e.getY() < RULER_HEIGHT && e.getX() >= KEY_WIDTH) {
-                // --- ルーラーエリアをクリックした場合 ---
-                long clickedTick = snapToGrid(xToTick(e.getX()), 4); // クリック位置を拍にスナップ
-
-                if (e.isAltDown()) {
-                    // Alt + Click for loop range setting
-                    if (SwingUtilities.isLeftMouseButton(e)) {
-                        setLoopRange(clickedTick, loopEndTick);
-                        System.out.println("Loop start set by Alt+LeftClick: " + loopStartTick);
-                    } else if (SwingUtilities.isRightMouseButton(e)) {
-                        setLoopRange(loopStartTick, clickedTick);
-                        System.out.println("Loop end set by Alt+RightClick: " + loopEndTick);
-                    }
-                    if (parentFrame != null) parentFrame.updateLoopButtonText();
-                    return; // Consume event
-                }
-
-                System.out.println("Ruler area clicked.");
-
-                if (e.isShiftDown()) {
-                    // Shift + クリック：再生開始位置 (playbackTick) を変更
-                    setPlaybackTick(clickedTick);
-                    System.out.println(String.format("  Playback position set to: %d by Shift+Click on ruler.", clickedTick));
-
-                } else if (e.isControlDown() || e.isMetaDown()) { // Ctrl/Cmd + クリック：ループ終了位置 (loopEndTick) を設定
-                    setLoopRange(loopStartTick, clickedTick);
-                    System.out.println(String.format("  Loop end set to: %d by Ctrl/Cmd+Click on ruler.", loopEndTick));
-                    if (parentFrame != null) parentFrame.updateLoopButtonText();
-
-                } else {
-                    // No modifier click: Set playback position
-                    if (parentFrame != null) {
-                        parentFrame.setPlaybackTickPosition(clickedTick);
-                    }
-                    System.out.println(String.format("  Playback position set to: %d by Click on ruler.", clickedTick));
                 }
             }
         }
@@ -862,19 +885,17 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 // --- Ruler Area Click Logic ---
                 long clickedTick = snapToGrid(xToTick(e.getX()), 4);
 
-                if (e.isControlDown()) { // Use Ctrl key as requested
-                    if (SwingUtilities.isLeftMouseButton(e)) {
-                        // Ctrl + Left Click: Set loop start
-                        setLoopRange(clickedTick, loopEndTick);
-                        System.out.println("Loop start set by Ctrl+LeftClick: " + loopStartTick);
-                    } else if (SwingUtilities.isRightMouseButton(e)) {
-                        // Ctrl + Right Click: Set loop end
-                        setLoopRange(loopStartTick, clickedTick);
-                        System.out.println("Loop end set by Ctrl+RightClick: " + loopEndTick);
-                    }
+                if (e.isControlDown()) { 
+                    // Ctrl + Click: Set loop start
+                    setLoopRange(clickedTick, loopEndTick);
+                    System.out.println("Loop start set by Ctrl+Click: " + loopStartTick);
                     if (parentFrame != null) parentFrame.updateLoopButtonText();
-
-                } else if (!e.isShiftDown() && !e.isAltDown() && !e.isMetaDown()) {
+                } else if (e.isAltDown()) {
+                    // Alt + Click: Set loop end
+                    setLoopRange(loopStartTick, clickedTick);
+                    System.out.println("Loop end set by Alt+Click: " + loopEndTick);
+                    if (parentFrame != null) parentFrame.updateLoopButtonText();
+                } else if (!e.isShiftDown() && !e.isMetaDown()) {
                     // No modifier click: Set playback position
                     if (parentFrame != null) {
                         parentFrame.setPlaybackTickPosition(clickedTick);
@@ -995,7 +1016,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                     // TODO: 複数ノート移動のUndo対応 (MoveMultipleNotesCommandなど)
                     if (selectedNotesList.size() == 1 && selectedNote != null && dragNoteOriginal != null) {
                         // 単一ノート移動のUndoコマンド登録
-                        long finalSnappedStartTime = snapToGrid(selectedNote.getStartTimeTicks(), 16);
+                        long finalSnappedStartTime = snapToGrid(selectedNote.getStartTimeTicks(), this.quantizeDivision);
                         int finalPitch = selectedNote.getPitch();
 
                         if (dragNoteOriginal.getStartTimeTicks() != finalSnappedStartTime || dragNoteOriginal.getPitch() != finalPitch) {
@@ -1030,7 +1051,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 System.out.println("mouseReleased: Note RESIZE finished.");
                 // リサイズは通常単一ノートのみ対象とする
                 if (selectedNote != null && dragNoteOriginal != null && selectedNotesList.size() == 1) {
-                    long finalSnappedDuration = snapToGrid(selectedNote.getDurationTicks(), 16);
+                    long finalSnappedDuration = snapToGrid(selectedNote.getDurationTicks(), this.quantizeDivision);
                     if (finalSnappedDuration < ppqn / 16) finalSnappedDuration = ppqn / 16; // 最小長さ
 
                     if (dragNoteOriginal.getDurationTicks() != finalSnappedDuration) {
