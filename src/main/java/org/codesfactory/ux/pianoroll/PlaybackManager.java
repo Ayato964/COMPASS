@@ -12,6 +12,7 @@ public class PlaybackManager {
     private final PianoRollView pianoRollView;
     private Thread playbackHeadUpdaterThread;
     private boolean isLoopingEnabled = false; // ★★★ ループ状態を管理するフラグを追加 ★★★
+    private float currentBpm = 120.0f; // User specified tempo in BPM
 
     /**
      * PlaybackManagerのコンストラクタ
@@ -90,6 +91,7 @@ public class PlaybackManager {
             }
 
             sequencer.setSequence(sequence);
+            sequencer.setTempoInBPM(this.currentBpm); // Apply BPM after sequence load
             System.out.println("PlaybackManager: Loaded " + (notes != null ? notes.size() : 0) + " notes into sequence.");
             sequencer.setTickPosition(0);
             updatePlaybackHead(0);
@@ -118,6 +120,7 @@ public class PlaybackManager {
             updatePlaybackHead(startTick); // 開始位置を即時反映
 
             sequencer.start();
+            sequencer.setTempoInBPM(this.currentBpm); // Re-apply BPM immediately after start (prevents standard MIDI reset)
             startPlaybackHeadUpdater();
             // ボタン状態の更新を View 経由で親フレームに依頼
             if (pianoRollView != null) {
@@ -204,13 +207,11 @@ public class PlaybackManager {
     }
 
     public float getTempo() {
-        if (sequencer != null) {
-            return sequencer.getTempoInBPM();
-        }
-        return 120.0f; // Default tempo
+        return this.currentBpm;
     }
 
     public void setTempo(float bpm) {
+        this.currentBpm = bpm;
         if (sequencer != null) {
             sequencer.setTempoInBPM(bpm);
         }
@@ -320,17 +321,18 @@ public class PlaybackManager {
         playbackHeadUpdaterThread.start();
     }
 
-    private void stopPlaybackHeadUpdaterThread() {
-        if (playbackHeadUpdaterThread != null && playbackHeadUpdaterThread.isAlive()) {
+    private synchronized void stopPlaybackHeadUpdaterThread() {
+        Thread thread = this.playbackHeadUpdaterThread;
+        if (thread != null && thread.isAlive()) {
             try {
-                playbackHeadUpdaterThread.interrupt();
-                playbackHeadUpdaterThread.join(100);
+                thread.interrupt();
+                thread.join(100);
                 System.out.println("PlaybackManager: Head updater thread stopped.");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
-        playbackHeadUpdaterThread = null;
+        this.playbackHeadUpdaterThread = null;
     }
 
     /**

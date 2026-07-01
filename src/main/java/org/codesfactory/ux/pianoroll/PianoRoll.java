@@ -20,6 +20,8 @@ import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
@@ -643,12 +645,12 @@ public class PianoRoll extends JFrame {
 
     private void generateMusic() {
         ModelInfo selectedModel = (ModelInfo) modelComboBox.getSelectedItem();
-        if (selectedModel == null || selectedModel.getModelName() == null) {
-            JOptionPane.showMessageDialog(this, "Please select an AI model first.", "Warning", JOptionPane.WARNING_MESSAGE);
+        if (selectedModel == null || selectedModel.getModelName() == null || selectedModel.getModelName().equals("MAINTENANCE")) {
+            JOptionPane.showMessageDialog(this, "有効なAIモデルを選択してください。", "Warning", JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        // --- Get Measure Range and Ticks from Toolbar ---
+        // --- Get Target Measure Range and Ticks from Toolbar ---
         int startMeasure;
         int endMeasure;
         long startTick;
@@ -665,38 +667,138 @@ public class PianoRoll extends JFrame {
             int ppqn = pianoRollView.getPpqn();
             int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
             int ticksPerMeasure = ppqn * beatsPerMeasure;
-            // Calculate the original start tick based on the user's input
-            long originalStartTick = (long)(startMeasure - 1) * ticksPerMeasure;
-            // Adjust the start tick to be one measure earlier, ensuring it's not negative
-            startTick = Math.max(0, originalStartTick - ticksPerMeasure);
+            
+            startTick = (long)(startMeasure - 1) * ticksPerMeasure;
             endTick = (long)endMeasure * ticksPerMeasure;
 
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this, "ツールバーの小節範囲に数値を入力してください。", "入力エラー", JOptionPane.ERROR_MESSAGE);
             return;
         }
-        // --- End of Get Range ---
 
+        // --- Past / Future Context Extraction (Max 8 Measures) ---
+        int ppqn = pianoRollView.getPpqn();
+        int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
+        int ticksPerMeasure = ppqn * beatsPerMeasure;
+        long maxContextTicks = (long) ticksPerMeasure * 8; // 8小節
 
-        // --- Parameter Input Dialog ---
-        JPanel panel = new JPanel(new GridLayout(0, 2, 5, 5));
+        List<Note> allNotes = pianoRollView.getAllNotes();
+
+        // 過去コンテキスト
+        long pastStart = Math.max(0, startTick - maxContextTicks);
+        long pastEnd = startTick;
+        List<Note> pastNotes = allNotes.stream()
+                .filter(n -> n.getStartTimeTicks() >= pastStart && n.getStartTimeTicks() < pastEnd)
+                .collect(Collectors.toList());
+
+        // 未来コンテキスト
+        long futureStart = endTick;
+        long futureEnd = endTick + maxContextTicks;
+        List<Note> futureNotes = allNotes.stream()
+                .filter(n -> n.getStartTimeTicks() >= futureStart && n.getStartTimeTicks() < futureEnd)
+                .collect(Collectors.toList());
+
+        boolean hasPast = !pastNotes.isEmpty();
+        boolean hasFuture = !futureNotes.isEmpty();
+        boolean hasContext = hasPast || hasFuture;
+
+        // --- Parameters Form UI ---
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 4, 4, 4);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        gbc.gridx = 0; gbc.gridy = 0;
+        panel.add(new JLabel("p (Nucleus Sampling):"), gbc);
         JSpinner pSpinner = new JSpinner(new SpinnerNumberModel(0.95, 0.0, 1.0, 0.01));
+        gbc.gridx = 1;
+        panel.add(pSpinner, gbc);
+
+        gbc.gridx = 0; gbc.gridy = 1;
+        panel.add(new JLabel("Temperature:"), gbc);
         JSpinner tempSpinner = new JSpinner(new SpinnerNumberModel(1.0, 0.1, 2.0, 0.1));
+        gbc.gridx = 1;
+        panel.add(tempSpinner, gbc);
 
-        panel.add(new JLabel("p (Nucleus Sampling):"));
-        panel.add(pSpinner);
-        panel.add(new JLabel("Temperature:"));
-        panel.add(tempSpinner);
+        // Key
+        JCheckBox keyCheckBox = new JCheckBox("キーを指定:");
+        JComboBox<String> keyComboBox = new JComboBox<>(new String[]{
+                "C", "Cm", "C#", "C#m", "D", "Dm", "D#", "D#m", "E", "Em", "F", "Fm",
+                "F#", "F#m", "G", "Gm", "G#", "G#m", "A", "Am", "A#", "A#m", "B", "Bm"
+        });
+        keyComboBox.setSelectedItem("C");
+        gbc.gridy = 2;
+        if (hasContext) {
+            gbc.gridx = 0; panel.add(keyCheckBox, gbc);
+            gbc.gridx = 1; panel.add(keyComboBox, gbc);
+            keyComboBox.setEnabled(false);
+            keyCheckBox.addActionListener(e -> keyComboBox.setEnabled(keyCheckBox.isSelected()));
+        } else {
+            gbc.gridx = 0; panel.add(new JLabel("Key:"), gbc);
+            gbc.gridx = 1; panel.add(keyComboBox, gbc);
+        }
 
-        int result = JOptionPane.showConfirmDialog(this, panel, "Generation Parameters", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (result != JOptionPane.OK_OPTION) {
+        // Genre
+        JCheckBox genreCheckBox = new JCheckBox("ジャンルを指定:");
+        String[] genres = {
+                "80s", "90s", "alternative", "ambient", "blues", "celtic", "chillout",
+                "classical", "country", "dance", "drumnbass", "easylistening", "electronic",
+                "electropop", "experimental", "folk", "funk", "hiphop", "house", "indie",
+                "instrumentalpop", "instrumentalrock", "jazz", "jazzfusion", "latin", "lounge",
+                "metal", "newage", "orchestral", "pop", "popfolk", "poprock", "punkrock",
+                "reggae", "rock", "soundtrack", "swing", "symphonic", "synthpop", "techno",
+                "trance", "world"
+        };
+        JComboBox<String> genreComboBox = new JComboBox<>(genres);
+        genreComboBox.setSelectedItem("jazz");
+        gbc.gridy = 3;
+        if (hasContext) {
+            gbc.gridx = 0; panel.add(genreCheckBox, gbc);
+            gbc.gridx = 1; panel.add(genreComboBox, gbc);
+            genreComboBox.setEnabled(false);
+            genreCheckBox.addActionListener(e -> genreComboBox.setEnabled(genreCheckBox.isSelected()));
+        } else {
+            gbc.gridx = 0; panel.add(new JLabel("Genre:"), gbc);
+            gbc.gridx = 1; panel.add(genreComboBox, gbc);
+        }
+
+        // Note Density
+        JCheckBox densityCheckBox = new JCheckBox("音符密度を指定:");
+        JSpinner densitySpinner = new JSpinner(new SpinnerNumberModel(4, 1, 10, 1));
+        gbc.gridy = 4;
+        if (hasContext) {
+            gbc.gridx = 0; panel.add(densityCheckBox, gbc);
+            gbc.gridx = 1; panel.add(densitySpinner, gbc);
+            densitySpinner.setEnabled(false);
+            densityCheckBox.addActionListener(e -> densitySpinner.setEnabled(densityCheckBox.isSelected()));
+        } else {
+            gbc.gridx = 0; panel.add(new JLabel("Note Density (1-10):"), gbc);
+            gbc.gridx = 1; panel.add(densitySpinner, gbc);
+        }
+
+        // Thinking (CoT)
+        JCheckBox thinkingCheckBox = new JCheckBox("Thinking (CoT)を送信する");
+        thinkingCheckBox.setSelected(true);
+        gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 2;
+        if (hasContext) {
+            panel.add(thinkingCheckBox, gbc);
+        }
+
+        int optionResult = JOptionPane.showConfirmDialog(this, panel, "Generation Parameters", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (optionResult != JOptionPane.OK_OPTION) {
             return; // User cancelled
         }
 
         double pValue = (Double) pSpinner.getValue();
         double tempValue = (Double) tempSpinner.getValue();
-        // --- End of Dialog ---
 
+        // Checkbox values
+        boolean sendKey = !hasContext || keyCheckBox.isSelected();
+        boolean sendGenre = !hasContext || genreCheckBox.isSelected();
+        boolean sendDensity = !hasContext || densityCheckBox.isSelected();
+        boolean sendThinking = hasContext && thinkingCheckBox.isSelected();
+
+        // --- Set up variables for GenerationWorker ---
         generateButton.setEnabled(false);
         infoLabel.setText("Generating music with " + selectedModel.getModelName() + "...");
         System.out.println("generateMusic: Starting GenerationWorker...");
@@ -705,79 +807,124 @@ public class PianoRoll extends JFrame {
             private final ModelInfo model;
             private final long workerStartTick;
             private final long workerEndTick;
+            private final List<Note> wPastNotes;
+            private final List<Note> wFutureNotes;
+            private final long wPastStart;
+            private final long wFutureStart;
 
-            public GenerationWorker(ModelInfo model, long startTick, long endTick) {
+            public GenerationWorker(ModelInfo model, long startTick, long endTick,
+                                    List<Note> pastNotes, List<Note> futureNotes,
+                                    long pastStart, long futureStart) {
                 this.model = model;
                 this.workerStartTick = startTick;
                 this.workerEndTick = endTick;
+                this.wPastNotes = pastNotes;
+                this.wFutureNotes = futureNotes;
+                this.wPastStart = pastStart;
+                this.wFutureStart = futureStart;
             }
 
             @Override
             protected MidiHandler.MidiData doInBackground() throws Exception {
                 System.out.println("GenerationWorker: doInBackground started.");
-                File tempMidiFile = File.createTempFile("compass-generate-", ".mid");
+                File tempPastMidiFile = null;
+                File tempFutureMidiFile = null;
                 File tempMetaFile = File.createTempFile("compass-meta-", ".json");
+
                 try {
                     System.out.println("GenerationWorker: Temporary files created.");
 
-                    // --- Filter notes based on measure range (using worker's ticks) ---
-                    List<Note> allNotes = pianoRollView.getAllNotes();
-                    List<Note> notesInRange = allNotes.stream()
-                            .filter(n -> n.getStartTimeTicks() >= this.workerStartTick && n.getStartTimeTicks() < this.workerEndTick)
-                            .collect(Collectors.toList());
+                    // 過去コンテキスト保存 (時間軸を0基準に左詰め。テンポはAPIとの整合性のために120BPM固定)
+                    if (!wPastNotes.isEmpty()) {
+                        tempPastMidiFile = File.createTempFile("compass-past-", ".mid");
+                        List<Note> shiftedPast = new ArrayList<>();
+                        for (Note n : wPastNotes) {
+                            shiftedPast.add(new Note(n.getPitch(), n.getStartTimeTicks() - wPastStart, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
+                        }
+                        MidiHandler.saveMidiFile(tempPastMidiFile, shiftedPast, pianoRollView.getPpqn(), 120.0f);
+                        System.out.println("GenerationWorker: Saved past context with " + wPastNotes.size() + " notes.");
+                    }
 
-                    System.out.println("GenerationWorker: Found " + notesInRange.size() + " notes in measure range.");
+                    // 未来コンテキスト保存 (時間軸を0基準に左詰め。テンポはAPIとの整合性のために120BPM固定)
+                    if (!wFutureNotes.isEmpty()) {
+                        tempFutureMidiFile = File.createTempFile("compass-future-", ".mid");
+                        List<Note> shiftedFuture = new ArrayList<>();
+                        for (Note n : wFutureNotes) {
+                            shiftedFuture.add(new Note(n.getPitch(), n.getStartTimeTicks() - wFutureStart, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
+                        }
+                        MidiHandler.saveMidiFile(tempFutureMidiFile, shiftedFuture, pianoRollView.getPpqn(), 120.0f);
+                        System.out.println("GenerationWorker: Saved future context with " + wFutureNotes.size() + " notes.");
+                    }
 
-                    // Save only the notes in the specified range
-                    MidiHandler.saveMidiFile(tempMidiFile, notesInRange, pianoRollView.getPpqn(), playbackManager.getTempo());
-                    System.out.println("GenerationWorker: Temp MIDI file saved with notes in range.");
-
-
+                    // meta_jsonの構築 (テンポはAPIとの整合性のために120BPM固定)
                     String modelType = model.getModelName();
-                    int tempo = (int) playbackManager.getTempo();
+                    int tempoVal = 120;
 
-                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList("PIANO"), tempo, "Meta2MIDI");
+                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList("PIANO"), tempoVal, "Meta2MIDI");
                     meta.setP(pValue);
                     meta.setTemperature(tempValue);
+
+                    if (sendKey) {
+                        meta.setKey(keyComboBox.getSelectedItem().toString());
+                    }
+                    if (sendGenre) {
+                        meta.setGenre(Collections.singletonList(genreComboBox.getSelectedItem().toString()));
+                    }
+                    if (sendDensity) {
+                        Map<String, Integer> densities = new HashMap<>();
+                        densities.put("PIANO", (Integer) densitySpinner.getValue());
+                        meta.setGenNoteDense(densities);
+                    }
+                    if (sendThinking) {
+                        meta.setThinking(true);
+                    }
+
+                    // 生成小節数を設定
+                    int totalTargetTicks = (int) (workerEndTick - workerStartTick);
+                    int measures = totalTargetTicks / ticksPerMeasure;
+                    if (measures < 1) measures = 1;
+                    if (measures > 8) measures = 8;
+                    meta.setGenfieldMeasure(measures);
 
                     try (FileWriter writer = new FileWriter(tempMetaFile)) {
                         new Gson().toJson(meta, writer);
                     }
-                    System.out.println("GenerationWorker: Temp meta JSON file saved.");
+                    System.out.println("GenerationWorker: Meta JSON configuration prepared.");
 
                     System.out.println("GenerationWorker: Calling API client...");
-                    byte[] responseBytes = mozartAPIClient.generate(tempMidiFile, tempMetaFile);
-                    System.out.println("GenerationWorker: API client returned.");
+                    byte[] responseBytes = mozartAPIClient.generate(tempPastMidiFile, tempFutureMidiFile, tempMetaFile);
+                    System.out.println("GenerationWorker: API client response received.");
 
                     byte[] midiBytes;
-
-                    // Check if the response is a ZIP file (PK header)
                     if (responseBytes.length > 2 && responseBytes[0] == 0x50 && responseBytes[1] == 0x4B) {
-                        System.out.println("GenerationWorker: ZIP file detected. Unzipping...");
+                        System.out.println("GenerationWorker: ZIP archive detected. Decompressing...");
                         try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(responseBytes))) {
                             ZipEntry zipEntry = zis.getNextEntry();
                             midiBytes = null;
                             while (zipEntry != null) {
                                 if (!zipEntry.isDirectory() && (zipEntry.getName().toLowerCase().endsWith(".mid") || zipEntry.getName().toLowerCase().endsWith(".midi"))) {
                                     midiBytes = zis.readAllBytes();
-                                    System.out.println("GenerationWorker: Found MIDI file in ZIP: " + zipEntry.getName());
+                                    System.out.println("GenerationWorker: Found generated midi file inside ZIP: " + zipEntry.getName());
                                     break;
                                 }
                                 zipEntry = zis.getNextEntry();
                             }
                             if (midiBytes == null) {
-                                throw new IOException("No MIDI file found in the generated ZIP archive.");
+                                throw new IOException("No MIDI file found inside generated ZIP.");
                             }
                         }
                     } else {
-                        System.out.println("GenerationWorker: Assuming raw MIDI data.");
+                        System.out.println("GenerationWorker: Loading raw MIDI response.");
                         midiBytes = responseBytes;
                     }
+
                     return MidiHandler.loadMidiFromBytes(midiBytes);
+
                 } finally {
-                    System.out.println("GenerationWorker: Deleting temporary files.");
-                    tempMidiFile.delete();
-                    tempMetaFile.delete();
+                    System.out.println("GenerationWorker: Cleaning up temp files...");
+                    if (tempPastMidiFile != null) tempPastMidiFile.delete();
+                    if (tempFutureMidiFile != null) tempFutureMidiFile.delete();
+                    if (tempMetaFile != null) tempMetaFile.delete();
                 }
             }
 
@@ -785,22 +932,17 @@ public class PianoRoll extends JFrame {
             protected void done() {
                 try {
                     MidiHandler.MidiData generatedData = get();
-                    System.out.println("GenerationWorker: done() method finished successfully.");
-
-                    // Call the method in PianoRollView to handle the note replacement
-                    pianoRollView.replaceNotesFrom(this.workerStartTick, generatedData.notes);
-
-                    // IMPORTANT: Force the playback manager to reload the updated notes
+                    System.out.println("GenerationWorker: done() successfully retrieved MIDI data.");
+                    
+                    // 選択範囲に限定してノートをマージ (PPQNスケーリング対応)
+                    pianoRollView.replaceNotesInRange(this.workerStartTick, this.workerEndTick, generatedData.notes, generatedData.ppqn);
+                    
+                    // Force playback reload
                     playbackManager.loadNotes(pianoRollView.getAllNotes(), pianoRollView.getPpqn());
-
-                    // Update tempo and UI
-                    // playbackManager.setTempo(generatedData.tempo); // Don't update tempo from generated file, as it might be incorrect.
                     updateTempoField();
                     infoLabel.setText("Music generation complete.");
-                    System.out.println("GenerationWorker: Note replacement and UI updates are complete.");
-
                 } catch (Exception e) {
-                    System.err.println("GenerationWorker: Error in done() method: " + e.getMessage());
+                    System.err.println("GenerationWorker done() error: " + e.getMessage());
                     e.printStackTrace();
                     infoLabel.setText("Error during music generation.");
                     JOptionPane.showMessageDialog(PianoRoll.this, "Failed to generate music: " + e.getMessage(), "Generation Error", JOptionPane.ERROR_MESSAGE);
@@ -810,7 +952,7 @@ public class PianoRoll extends JFrame {
             }
         }
 
-        new GenerationWorker(selectedModel, startTick, endTick).execute();
+        new GenerationWorker(selectedModel, startTick, endTick, pastNotes, futureNotes, pastStart, futureStart).execute();
     }
 
     // --- Utility ---

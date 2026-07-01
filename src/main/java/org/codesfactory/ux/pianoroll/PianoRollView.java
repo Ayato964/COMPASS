@@ -323,19 +323,41 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         }
     }
 
-    public void replaceNotesFrom(long startTick, List<Note> generatedNotes) {
+    public void replaceNotesFrom(long startTick, List<Note> generatedNotes, int generatedPpqn) {
+        double scale = (double) this.ppqn / generatedPpqn;
+        long measureTicks = (long) generatedPpqn * beatsPerMeasure;
+
+        // Check if there is at least a 1-measure blank in the generated MIDI
+        boolean hasOneMeasureBlank = false;
+        if (!generatedNotes.isEmpty()) {
+            long minStart = generatedNotes.stream()
+                    .mapToLong(Note::getStartTimeTicks)
+                    .min()
+                    .orElse(0);
+            if (minStart >= measureTicks) {
+                hasOneMeasureBlank = true;
+                System.out.println("replaceNotesFrom: Detected 1 measure blank in generated MIDI (" + measureTicks + " ticks). Trimming it.");
+            }
+        }
+
         // Find notes to delete from the live list
         List<Note> notesToDelete = this.notes.stream()
                 .filter(n -> n.getStartTimeTicks() >= startTick)
                 .collect(Collectors.toList());
 
-        // Shift new notes to the start tick
+        // Shift and scale new notes to the start tick
         List<Note> newNotes = new ArrayList<>();
         for (Note note : generatedNotes) {
+            long adjustedStart = note.getStartTimeTicks();
+            if (hasOneMeasureBlank) {
+                adjustedStart -= measureTicks;
+            }
+            long scaledStart = Math.round(adjustedStart * scale);
+            long scaledDuration = Math.round(note.getDurationTicks() * scale);
             newNotes.add(new Note(
                     note.getPitch(),
-                    note.getStartTimeTicks() + startTick,
-                    note.getDurationTicks(),
+                    scaledStart + startTick,
+                    scaledDuration,
                     note.getVelocity(),
                     note.getChannel()
             ));
@@ -345,6 +367,56 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         ReplaceNotesCommand command = new ReplaceNotesCommand(
                 this,
                 this.notes, // Pass the live list
+                notesToDelete,
+                newNotes
+        );
+        this.undoManager.executeCommand(command);
+    }
+
+    public void replaceNotesInRange(long startTick, long endTick, List<Note> generatedNotes, int generatedPpqn) {
+        double scale = (double) this.ppqn / generatedPpqn;
+        long measureTicks = (long) generatedPpqn * beatsPerMeasure;
+
+        // Check if there is at least a 1-measure blank in the generated MIDI
+        boolean hasOneMeasureBlank = false;
+        if (!generatedNotes.isEmpty()) {
+            long minStart = generatedNotes.stream()
+                    .mapToLong(Note::getStartTimeTicks)
+                    .min()
+                    .orElse(0);
+            if (minStart >= measureTicks) {
+                hasOneMeasureBlank = true;
+                System.out.println("replaceNotesInRange: Detected 1 measure blank in generated MIDI (" + measureTicks + " ticks). Trimming it.");
+            }
+        }
+
+        // 削除対象は指定範囲内のノートのみ
+        List<Note> notesToDelete = this.notes.stream()
+                .filter(n -> n.getStartTimeTicks() >= startTick && n.getStartTimeTicks() < endTick)
+                .collect(Collectors.toList());
+
+        // 生成されたノートの開始時間を startTick 起点に補正し、かつ PPQN 比率でスケーリング
+        List<Note> newNotes = new ArrayList<>();
+        for (Note note : generatedNotes) {
+            long adjustedStart = note.getStartTimeTicks();
+            if (hasOneMeasureBlank) {
+                adjustedStart -= measureTicks;
+            }
+            long scaledStart = Math.round(adjustedStart * scale);
+            long scaledDuration = Math.round(note.getDurationTicks() * scale);
+            newNotes.add(new Note(
+                    note.getPitch(),
+                    scaledStart + startTick,
+                    scaledDuration,
+                    note.getVelocity(),
+                    note.getChannel()
+            ));
+        }
+
+        // ReplaceNotesCommand を実行
+        ReplaceNotesCommand command = new ReplaceNotesCommand(
+                this,
+                this.notes,
                 notesToDelete,
                 newNotes
         );

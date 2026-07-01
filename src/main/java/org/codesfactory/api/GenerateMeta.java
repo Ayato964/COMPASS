@@ -2,6 +2,7 @@ package org.codesfactory.api;
 
 import com.google.gson.annotations.SerializedName;
 import java.util.List;
+import java.util.Map;
 
 public class GenerateMeta {
     @SerializedName("model_type")
@@ -17,10 +18,25 @@ public class GenerateMeta {
     private String task;
     
     @SerializedName("p")
-    private double p = 0.95;
+    private Double p; // Use Double wrapper to allow null to be excluded from serialization
     
     @SerializedName("temperature")
-    private double temperature = 1.0;
+    private Double temperature;
+
+    @SerializedName("key")
+    private String key;
+
+    @SerializedName("genre")
+    private List<String> genre;
+
+    @SerializedName("gen_note_dense")
+    private Map<String, Integer> genNoteDense;
+
+    @SerializedName("thinking")
+    private Boolean thinking;
+
+    @SerializedName("genfield_measure")
+    private Integer genfieldMeasure;
 
     public GenerateMeta(String modelType, List<Object> program, int tempo, String task) {
         this.modelType = modelType;
@@ -29,11 +45,31 @@ public class GenerateMeta {
         this.task = task;
     }
 
-    public void setP(double p) {
+    public void setP(Double p) {
         this.p = p;
     }
 
-    public void setTemperature(double temperature) {
+    public void setTemperature(Double temperature) {
         this.temperature = temperature;
+    }
+
+    public void setKey(String key) {
+        this.key = key;
+    }
+
+    public void setGenre(List<String> genre) {
+        this.genre = genre;
+    }
+
+    public void setGenNoteDense(Map<String, Integer> genNoteDense) {
+        this.genNoteDense = genNoteDense;
+    }
+
+    public void setThinking(Boolean thinking) {
+        this.thinking = thinking;
+    }
+
+    public void setGenfieldMeasure(Integer genfieldMeasure) {
+        this.genfieldMeasure = genfieldMeasure;
     }
 }
