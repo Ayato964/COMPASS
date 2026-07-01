@@ -119,7 +119,7 @@ public class PianoRoll extends JFrame {
 
         Font iconFont = new Font("Segoe UI Emoji", Font.PLAIN, 18);
 
-        // --- Left Group ---
+        // --- Left Group (Playback Controls & Zoom) ---
         loopButton = new JButton("🔁");
         loopButton.setFont(iconFont);
         loopButton.setToolTipText("Toggle Loop");
@@ -135,44 +135,6 @@ public class PianoRoll extends JFrame {
             updateLoopButtonText();
         });
         toolBar.add(loopButton);
-        toolBar.add(Box.createHorizontalStrut(15));
-
-        JButton zoomInHBtn = new JButton("+");
-        zoomInHBtn.setToolTipText("Horizontal Zoom In (Ctrl+Wheel)");
-        zoomInHBtn.setFocusPainted(false);
-        zoomInHBtn.addActionListener(e -> pianoRollView.zoomInHorizontal());
-        toolBar.add(zoomInHBtn);
-
-        JButton zoomOutHBtn = new JButton("-");
-        zoomOutHBtn.setToolTipText("Horizontal Zoom Out (Ctrl+Wheel)");
-        zoomOutHBtn.setFocusPainted(false);
-        zoomOutHBtn.addActionListener(e -> pianoRollView.zoomOutHorizontal());
-        toolBar.add(zoomOutHBtn);
-
-        toolBar.add(Box.createHorizontalStrut(10));
-
-        JButton zoomInVBtn = new JButton("+");
-        zoomInVBtn.setToolTipText("Vertical Zoom In (Ctrl+Shift+Wheel)");
-        zoomInVBtn.setFocusPainted(false);
-        zoomInVBtn.addActionListener(e -> pianoRollView.zoomInVertical());
-        toolBar.add(zoomInVBtn);
-
-        JButton zoomOutVBtn = new JButton("-");
-        zoomOutVBtn.setToolTipText("Vertical Zoom Out (Ctrl+Shift+Wheel)");
-        zoomOutVBtn.setFocusPainted(false);
-        zoomOutVBtn.addActionListener(e -> pianoRollView.zoomOutVertical());
-        toolBar.add(zoomOutVBtn);
-
-        // --- Center Group ---
-        toolBar.add(Box.createHorizontalGlue());
-
-        generateButton = new JButton("✨");
-        generateButton.setFont(iconFont);
-        generateButton.setToolTipText("Generate Music with AI");
-        generateButton.setFocusPainted(false);
-        generateButton.setEnabled(false);
-        generateButton.addActionListener(e -> generateMusic());
-        toolBar.add(generateButton);
         toolBar.add(Box.createHorizontalStrut(5));
 
         playButton = new JButton("▶");
@@ -189,28 +151,75 @@ public class PianoRoll extends JFrame {
         stopButton.setFocusPainted(false);
         stopButton.addActionListener(e -> playbackManager.stop());
         toolBar.add(stopButton);
-
         toolBar.add(Box.createHorizontalStrut(10));
-        toolBar.add(new JLabel("Tempo:"));
-        toolBar.add(Box.createHorizontalStrut(5));
-        tempoField = new JTextField(5);
-        tempoField.setMaximumSize(new Dimension(60, 24));
+
+        toolBar.add(new JLabel("BPM:"));
+        toolBar.add(Box.createHorizontalStrut(3));
+        tempoField = new JTextField(3);
+        tempoField.setMaximumSize(new Dimension(45, 24));
         tempoField.setToolTipText("Set Tempo (BPM) and press Enter");
         tempoField.addActionListener(e -> updateTempoFromField());
         toolBar.add(tempoField);
         toolBar.add(Box.createHorizontalStrut(15));
 
-        // --- Quantize & Time Signature UI ---
-        toolBar.add(new JLabel("Quantize:"));
+        toolBar.add(new JLabel("Zoom:"));
+        toolBar.add(Box.createHorizontalStrut(3));
+        JButton zoomInHBtn = new JButton("↔+");
+        zoomInHBtn.setToolTipText("Horizontal Zoom In (Ctrl+Wheel)");
+        zoomInHBtn.setFocusPainted(false);
+        zoomInHBtn.addActionListener(e -> pianoRollView.zoomInHorizontal());
+        toolBar.add(zoomInHBtn);
+        JButton zoomOutHBtn = new JButton("↔-");
+        zoomOutHBtn.setToolTipText("Horizontal Zoom Out (Ctrl+Wheel)");
+        zoomOutHBtn.setFocusPainted(false);
+        zoomOutHBtn.addActionListener(e -> pianoRollView.zoomOutHorizontal());
+        toolBar.add(zoomOutHBtn);
+        toolBar.add(Box.createHorizontalStrut(3));
+        JButton zoomInVBtn = new JButton("↕+");
+        zoomInVBtn.setToolTipText("Vertical Zoom In (Ctrl+Shift+Wheel)");
+        zoomInVBtn.setFocusPainted(false);
+        zoomInVBtn.addActionListener(e -> pianoRollView.zoomInVertical());
+        toolBar.add(zoomInVBtn);
+        JButton zoomOutVBtn = new JButton("↕-");
+        zoomOutVBtn.setToolTipText("Vertical Zoom Out (Ctrl+Shift+Wheel)");
+        zoomOutVBtn.setFocusPainted(false);
+        zoomOutVBtn.addActionListener(e -> pianoRollView.zoomOutVertical());
+        toolBar.add(zoomOutVBtn);
+
+        // Center alignment Glue
+        toolBar.add(Box.createHorizontalGlue());
+
+        // --- Center Group (AI Model Selection - Large) ---
+        toolBar.add(new JLabel("AI Model:"));
         toolBar.add(Box.createHorizontalStrut(5));
+        modelComboBox = new JComboBox<>();
+        modelComboBox.setEnabled(false);
+        modelComboBox.setMinimumSize(new Dimension(150, 26));
+        modelComboBox.setPreferredSize(new Dimension(220, 26));
+        modelComboBox.setMaximumSize(new Dimension(280, 26));
+        toolBar.add(modelComboBox);
+        toolBar.add(Box.createHorizontalStrut(5));
+
+        generateButton = new JButton("✨ Generate");
+        generateButton.setToolTipText("Generate Music with AI");
+        generateButton.setFocusPainted(false);
+        generateButton.setEnabled(false);
+        generateButton.addActionListener(e -> generateMusic());
+        toolBar.add(generateButton);
+
+        // Right alignment Glue
+        toolBar.add(Box.createHorizontalGlue());
+
+        // --- Right Group (Quantize, Time Sig, Range) ---
+        toolBar.add(new JLabel("Quantize:"));
+        toolBar.add(Box.createHorizontalStrut(3));
         String[] quantizeOptions = {"1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64"};
         JComboBox<String> quantizeComboBox = new JComboBox<>(quantizeOptions);
         quantizeComboBox.setSelectedItem("1/16");
-        quantizeComboBox.setMaximumSize(new Dimension(80, 24));
+        quantizeComboBox.setMaximumSize(new Dimension(70, 24));
         toolBar.add(quantizeComboBox);
 
-        toolBar.add(Box.createHorizontalStrut(5));
-        JCheckBox tripletCheckBox = new JCheckBox("3連符");
+        JCheckBox tripletCheckBox = new JCheckBox("3連");
         toolBar.add(tripletCheckBox);
 
         ActionListener quantizeListener = e -> {
@@ -218,57 +227,45 @@ public class PianoRoll extends JFrame {
         };
         quantizeComboBox.addActionListener(quantizeListener);
         tripletCheckBox.addActionListener(quantizeListener);
-
         toolBar.add(Box.createHorizontalStrut(10));
-        toolBar.add(new JLabel("Time Sig:"));
-        toolBar.add(Box.createHorizontalStrut(5));
+
+        toolBar.add(new JLabel("Sig:"));
+        toolBar.add(Box.createHorizontalStrut(3));
         String[] timeSigOptions = {"4/4", "3/4"};
         JComboBox<String> timeSigComboBox = new JComboBox<>(timeSigOptions);
         timeSigComboBox.setSelectedItem("4/4");
-        timeSigComboBox.setMaximumSize(new Dimension(70, 24));
+        timeSigComboBox.setMaximumSize(new Dimension(60, 24));
         timeSigComboBox.addActionListener(e -> {
             updateTimeSignature(timeSigComboBox.getSelectedItem().toString());
         });
         toolBar.add(timeSigComboBox);
         toolBar.add(Box.createHorizontalStrut(15));
 
-        toolBar.add(new JLabel("Range (Measures):"));
-        toolBar.add(Box.createHorizontalStrut(5));
-
-        loopStartField = new JTextField(5);
+        toolBar.add(new JLabel("Range:"));
+        toolBar.add(Box.createHorizontalStrut(3));
+        loopStartField = new JTextField(2);
+        loopStartField.setMaximumSize(new Dimension(30, 24));
         loopStartField.setToolTipText("Start Measure (Press Enter to set loop)");
         loopStartField.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(loopStartField);
 
-        toolBar.add(Box.createHorizontalStrut(5));
         toolBar.add(new JLabel("-"));
-        toolBar.add(Box.createHorizontalStrut(5));
-
-        loopEndField = new JTextField(5);
+        loopEndField = new JTextField(2);
+        loopEndField.setMaximumSize(new Dimension(30, 24));
         loopEndField.setToolTipText("End Measure (Press Enter to set loop)");
         loopEndField.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(loopEndField);
+        toolBar.add(Box.createHorizontalStrut(3));
 
-        toolBar.add(Box.createHorizontalStrut(5));
-        JButton setLoopButton = new JButton("Set Loop");
+        JButton setLoopButton = new JButton("Set");
         setLoopButton.setToolTipText("Apply new loop range based on measures");
         setLoopButton.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(setLoopButton);
 
-        toolBar.add(Box.createHorizontalStrut(5));
-        JButton selectButton = new JButton("Select");
+        JButton selectButton = new JButton("Sel");
         selectButton.setToolTipText("Select notes in the specified measure range");
         selectButton.addActionListener(e -> selectNotesByMeasureRange());
         toolBar.add(selectButton);
-
-        // --- Right Group ---
-        toolBar.add(Box.createHorizontalGlue());
-
-        toolBar.add(new JLabel("AI Model: "));
-        modelComboBox = new JComboBox<>();
-        modelComboBox.setEnabled(false);
-        modelComboBox.setMaximumSize(new Dimension(200, 30));
-        toolBar.add(modelComboBox);
 
         return toolBar;
     }
@@ -620,10 +617,7 @@ public class PianoRoll extends JFrame {
                     modelComboBox.removeAllItems();
                     if (models.isEmpty()) {
                         infoLabel.setText("No AI models found.");
-                        modelComboBox.addItem(new ModelInfo() {
-                            @Override
-                            public String toString() { return "No models available"; }
-                        });
+                        modelComboBox.addItem(new ModelInfo("MAINTENANCE", "メンテナンス中"));
                         modelComboBox.setEnabled(false);
                         generateButton.setEnabled(false);
                     } else {
@@ -636,8 +630,9 @@ public class PianoRoll extends JFrame {
                     }
                 } catch (InterruptedException | ExecutionException e) {
                     e.printStackTrace();
-                    infoLabel.setText("Error loading AI models.");
-                    JOptionPane.showMessageDialog(PianoRoll.this, "Could not connect to MozartAPI: " + e.getMessage(), "API Error", JOptionPane.ERROR_MESSAGE);
+                    infoLabel.setText("Error loading AI models. Offline or maintenance.");
+                    modelComboBox.removeAllItems();
+                    modelComboBox.addItem(new ModelInfo("MAINTENANCE", "メンテナンス中"));
                     modelComboBox.setEnabled(false);
                     generateButton.setEnabled(false);
                 }
@@ -741,7 +736,7 @@ public class PianoRoll extends JFrame {
                     String modelType = model.getModelName();
                     int tempo = (int) playbackManager.getTempo();
 
-                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList(0), tempo, "MELODY_GEM");
+                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList("PIANO"), tempo, "Meta2MIDI");
                     meta.setP(pValue);
                     meta.setTemperature(tempValue);
 

@@ -54,6 +54,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private final List<Note> selectedNotesList = new ArrayList<>(); // 複数選択されたノートのリスト
     private Point dragStartPoint = null;
     private Note dragNoteOriginal = null; // 単一ノートの移動/リサイズ開始時の状態
+    private final List<Note> dragNotesOriginal = new ArrayList<>(); // 複数ノートのオリジナル状態
     // TODO: 複数ノート移動/リサイズ時の Undo/Redo 対応 (dragNoteOriginal の扱いを要検討)
 
     private enum DragMode {NONE, MOVE, RESIZE_END} // PITCH_ONLY は長押し用
@@ -378,28 +379,90 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     public long getLoopEndTick() { return loopEndTick; }
 
     // --- Zoom Methods ---
-    public void zoomInHorizontal() { /* ... 実装済み ... */
-        pixelsPerTick *= 1.5;
-        pixelsPerTick = Math.min(pixelsPerTick, 2.0);
-        updatePreferredSize();
+    public void zoomInHorizontal() {
+        zoomInHorizontal(null);
+    }
+    public void zoomOutHorizontal() {
+        zoomOutHorizontal(null);
+    }
+    public void zoomInHorizontal(Point center) {
+        zoomHorizontal(1.5, center);
+    }
+    public void zoomOutHorizontal(Point center) {
+        zoomHorizontal(1.0 / 1.5, center);
+    }
+
+    private void zoomHorizontal(double factor, Point center) {
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        if (scrollPane != null) {
+            JViewport viewport = scrollPane.getViewport();
+            Point viewPos = viewport.getViewPosition();
+            int viewWidth = viewport.getWidth();
+
+            int zoomX = (center != null) ? center.x : (viewPos.x + viewWidth / 2);
+            long anchorTick = xToTick(zoomX);
+            int viewportMouseX = zoomX - viewPos.x;
+
+            pixelsPerTick *= factor;
+            pixelsPerTick = Math.min(2.0, Math.max(0.005, pixelsPerTick));
+
+            updatePreferredSize();
+
+            int newZoomX = tickToX(anchorTick);
+            int newViewX = newZoomX - viewportMouseX;
+            newViewX = Math.max(0, Math.min(newViewX, getPreferredSize().width - viewWidth));
+
+            viewPos.x = newViewX;
+            viewport.setViewPosition(viewPos);
+        } else {
+            pixelsPerTick *= factor;
+            pixelsPerTick = Math.min(2.0, Math.max(0.005, pixelsPerTick));
+            updatePreferredSize();
+        }
         repaint();
     }
-    public void zoomOutHorizontal() { /* ... 実装済み ... */
-        pixelsPerTick /= 1.5;
-        pixelsPerTick = Math.max(0.005, pixelsPerTick);
-        updatePreferredSize();
-        repaint();
+
+    public void zoomInVertical() {
+        zoomInVertical(null);
     }
-    public void zoomInVertical() { /* ... 実装済み ... */
-        noteHeight += 2;
-        noteHeight = Math.min(noteHeight, 30);
-        updatePreferredSize();
-        repaint();
+    public void zoomOutVertical() {
+        zoomOutVertical(null);
     }
-    public void zoomOutVertical() { /* ... 実装済み ... */
-        noteHeight -= 2;
-        noteHeight = Math.max(6, noteHeight);
-        updatePreferredSize();
+    public void zoomInVertical(Point center) {
+        zoomVertical(2, center);
+    }
+    public void zoomOutVertical(Point center) {
+        zoomVertical(-2, center);
+    }
+
+    private void zoomVertical(int delta, Point center) {
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        if (scrollPane != null) {
+            JViewport viewport = scrollPane.getViewport();
+            Point viewPos = viewport.getViewPosition();
+            int viewHeight = viewport.getHeight();
+
+            int zoomY = (center != null) ? center.y : (viewPos.y + viewHeight / 2);
+            int anchorPitch = yToPitch(zoomY);
+            int viewportMouseY = zoomY - viewPos.y;
+
+            noteHeight += delta;
+            noteHeight = Math.min(30, Math.max(6, noteHeight));
+
+            updatePreferredSize();
+
+            if (anchorPitch != -1) {
+                int newZoomY = pitchToY(anchorPitch);
+                int newViewY = newZoomY - viewportMouseY;
+                newViewY = Math.max(0, Math.min(newViewY, getPreferredSize().height - viewHeight));
+                viewPos.y = newViewY;
+                viewport.setViewPosition(viewPos);
+            }
+        } else {
+            noteHeight += delta;
+            noteHeight = Math.min(30, Math.max(6, noteHeight));
+            updatePreferredSize();
+        }
         repaint();
     }
 
@@ -451,8 +514,11 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     }
 
     private Optional<Note> getNoteAt(int x, int y) {
-        // ... (ログ強化版 or 通常版 - 前回提示の通り) ...
-        if (x < KEY_WIDTH || y < RULER_HEIGHT || y >= getHeight() - CONTROLLER_LANE_HEIGHT) return Optional.empty();
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
+        int localX = x - offsetX;
+
+        if (localX < KEY_WIDTH || y < RULER_HEIGHT || y >= getHeight() - CONTROLLER_LANE_HEIGHT) return Optional.empty();
         long targetTick = xToTick(x);
         int targetPitch = yToPitch(y);
         if (targetPitch == -1) return Optional.empty();
@@ -502,12 +568,14 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         g2d.fillRect(clip.x, clip.y, clip.width, clip.height);
 
         drawGrid(g2d, clip);
-        drawRuler(g2d, clip);
-        drawPianoKeys(g2d, clip);
         if (isLoopRangeVisible()) drawLoopRange(g2d, clip);
         drawNotes(g2d, clip); // Handles selection highlighting
-        drawControllerLane(g2d, clip);
         drawPlaybackHead(g2d, clip);
+
+        // Render lane, ruler and keys as top overlay layers that snap to screen boundaries
+        drawControllerLane(g2d, clip);
+        drawRuler(g2d, clip);
+        drawPianoKeys(g2d, clip);
 
         if (isMarqueeSelecting && marqueeRect != null) {
             g2d.setColor(new Color(0, 100, 255, 50));
@@ -603,7 +671,10 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
             }
         }
     }
-    private void drawPianoKeys(Graphics2D g2d, Rectangle clip) { /* ... 実装済み ... */
+    private void drawPianoKeys(Graphics2D g2d, Rectangle clip) {
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
+
         g2d.setFont(new Font("Arial", Font.PLAIN, Math.max(8, noteHeight - 4)));
         int firstVisibleY = Math.max(RULER_HEIGHT, clip.y);
         int lastVisibleY = Math.min(RULER_HEIGHT + totalPitches() * noteHeight, clip.y + clip.height);
@@ -614,21 +685,21 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
             if (isBlackKey(pitch)) {
                 g2d.setColor(BLACK_KEY_COLOR);
-                g2d.fillRect(0, y, KEY_WIDTH * 2 / 3, noteHeight);
+                g2d.fillRect(offsetX, y, KEY_WIDTH * 2 / 3, noteHeight);
             } else {
                 g2d.setColor(WHITE_KEY_COLOR);
-                g2d.fillRect(0, y, KEY_WIDTH, noteHeight);
+                g2d.fillRect(offsetX, y, KEY_WIDTH, noteHeight);
                 g2d.setColor(Color.GRAY);
-                g2d.drawRect(0, y, KEY_WIDTH, noteHeight);
+                g2d.drawRect(offsetX, y, KEY_WIDTH, noteHeight);
                 if (pitch % 12 == 0) { // C notes
                     g2d.setColor(Color.DARK_GRAY);
                     String pitchName = "C" + (pitch / 12 -1); // MIDI 0 = C-1
-                    g2d.drawString(pitchName, 5, y + noteHeight - 3);
+                    g2d.drawString(pitchName, offsetX + 5, y + noteHeight - 3);
                 }
             }
         }
         g2d.setColor(Color.DARK_GRAY);
-        g2d.drawLine(KEY_WIDTH -1, RULER_HEIGHT, KEY_WIDTH -1, getHeight() - CONTROLLER_LANE_HEIGHT);
+        g2d.drawLine(offsetX + KEY_WIDTH - 1, RULER_HEIGHT, offsetX + KEY_WIDTH - 1, getHeight() - CONTROLLER_LANE_HEIGHT);
     }
     private void drawGrid(Graphics2D g2d, Rectangle clip) { /* ... 実装済み ... */
         int gridTopY = RULER_HEIGHT;
@@ -662,7 +733,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                     continue; // Skip beat line if too dense
                 }
             } else {
-                if (pixelsPerQuantize >= 8) {
+                if (pixelsPerQuantize >= 3) {
                     g2d.setColor(GRID_LINE_COLOR_DARK.darker());
                 } else {
                     continue; // Skip quantize line if too dense (implements adaptive zoom visibility)
@@ -799,9 +870,13 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
             return;
         }
 
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
+        int localX = e.getX() - offsetX;
+
         if (e.getButton() == MouseEvent.BUTTON1) {
 
-            if (e.getX() < KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+            if (localX < KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 // ピアノ鍵盤クリック
                 int pitch = yToPitch(e.getY());
                 if (pitch != -1) {
@@ -811,7 +886,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                         parentFrame.getPlaybackManager().playNotePreview(pitch);
                     }
                 }
-            } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+            } else if (localX >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 // ノートエリアクリック
                 Optional<Note> clickedNoteOpt = getNoteAt(e.getX(), e.getY());
 
@@ -873,7 +948,11 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
             isLongPress = false; // Press時にリセット
             longPressTimer.stop(); // 既存タイマー停止
 
-            if (e.isShiftDown() && e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+            JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+            int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
+            int localX = e.getX() - offsetX;
+
+            if (e.isShiftDown() && localX >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 // Shift + クリック -> 外形描画開始
                 isDrawingOutline = true;
                 currentDragMode = DragMode.NONE;
@@ -881,7 +960,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 outlinePathPoints.clear();
                 outlinePathPoints.add(e.getPoint());
                 repaint();
-            } else if (e.getX() >= KEY_WIDTH && e.getY() < RULER_HEIGHT) {
+            } else if (localX >= KEY_WIDTH && e.getY() < RULER_HEIGHT) {
                 // --- Ruler Area Click Logic ---
                 long clickedTick = snapToGrid(xToTick(e.getX()), 4);
 
@@ -905,7 +984,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 // Consume the event to prevent other interactions
                 e.consume();
 
-            } else if (e.getX() >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+            } else if (localX >= KEY_WIDTH && e.getY() > RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 // 通常のノートエリアプレス
                 isDrawingOutline = false;
                 Optional<Note> noteOpt = getNoteAt(e.getX(), e.getY());
@@ -925,8 +1004,12 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                         } else {
                             currentDragMode = DragMode.MOVE;
                         }
-                        // 元の状態を保存 (単一選択のみ)
+                        // 元の状態を保存 (単一および複数選択)
                         dragNoteOriginal = new Note(selectedNote.getPitch(), selectedNote.getStartTimeTicks(), selectedNote.getDurationTicks(), selectedNote.getVelocity(), selectedNote.getChannel());
+                        dragNotesOriginal.clear();
+                        for (Note n : selectedNotesList) {
+                            dragNotesOriginal.add(new Note(n.getPitch(), n.getStartTimeTicks(), n.getDurationTicks(), n.getVelocity(), n.getChannel()));
+                        }
                         longPressTimer.restart(); // 長押し判定開始
                     } else if (e.isShiftDown()) { // Shift + クリック -> 複数選択に追加/削除 (トグル)
                         currentDragMode = DragMode.NONE; // ドラッグは開始しない
@@ -1033,12 +1116,53 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                         // totalTicks 更新チェック (単一の場合)
                         checkAndUpdateTotalTicks(selectedNote);
 
-                    } else if (selectedNotesList.size() > 1) {
-                        System.out.println("  Multiple notes move finished - Undo/Redo not fully implemented yet.");
-                        // TODO: 複数ノート移動のUndoコマンド登録処理
-                        // TODO: 複数ノート移動後の totalTicks 更新チェック
-                        checkAndUpdateTotalTicksForMultipleNotes(); // ヘルパーメソッドを呼ぶ
-                        repaint(); // ドラッグ中の表示を確定
+                    } else if (selectedNotesList.size() > 1 && !dragNotesOriginal.isEmpty()) {
+                        // 複数ノート移動のUndoコマンド登録
+                        List<Long> origStartTicks = new ArrayList<>();
+                        List<Integer> origPitches = new ArrayList<>();
+                        List<Long> finStartTicks = new ArrayList<>();
+                        List<Integer> finPitches = new ArrayList<>();
+                        boolean changed = false;
+
+                        for (int i = 0; i < selectedNotesList.size(); i++) {
+                            Note note = selectedNotesList.get(i);
+                            Note orig = dragNotesOriginal.get(i);
+                            
+                            long origStart = orig.getStartTimeTicks();
+                            int origPitch = orig.getPitch();
+                            
+                            // スナップを適用
+                            long finStart = snapToGrid(note.getStartTimeTicks(), this.quantizeDivision);
+                            int finPitch = note.getPitch();
+
+                            origStartTicks.add(origStart);
+                            origPitches.add(origPitch);
+                            finStartTicks.add(finStart);
+                            finPitches.add(finPitch);
+
+                            if (origStart != finStart || origPitch != finPitch) {
+                                changed = true;
+                            }
+                        }
+
+                        if (changed) {
+                            System.out.println("  Registering MoveMultipleNotesCommand.");
+                            MoveMultipleNotesCommand moveMultipleCmd = new MoveMultipleNotesCommand(
+                                this, selectedNotesList, origStartTicks, origPitches, finStartTicks, finPitches
+                            );
+                            undoManager.executeCommand(moveMultipleCmd);
+                        } else {
+                            // 元に戻す
+                            for (int i = 0; i < selectedNotesList.size(); i++) {
+                                Note note = selectedNotesList.get(i);
+                                Note orig = dragNotesOriginal.get(i);
+                                note.setStartTimeTicks(orig.getStartTimeTicks());
+                                note.setPitch(orig.getPitch());
+                            }
+                            System.out.println("  Multiple notes position did not change, no command registered.");
+                            repaint();
+                        }
+                        checkAndUpdateTotalTicksForMultipleNotes();
                     }
                     // 情報ラベル更新 (選択状態に応じて)
                     updateNoteInfoForFrame(selectedNote); // 複数選択時はupdateNoteInfo内で分岐される
@@ -1124,9 +1248,13 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     @Override
     public void mouseDragged(MouseEvent e) {
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
+        int localX = e.getX() - offsetX;
+
         if (isDrawingOutline) {
             // 外形描画モード
-            if (e.getX() >= KEY_WIDTH && e.getY() >= RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
+            if (localX >= KEY_WIDTH && e.getY() >= RULER_HEIGHT && e.getY() < getHeight() - CONTROLLER_LANE_HEIGHT) {
                 outlinePathPoints.add(e.getPoint());
             }
             repaint();
@@ -1139,20 +1267,55 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 repaint();
             }
         } else if (currentDragMode == DragMode.MOVE && !selectedNotesList.isEmpty()) {
-            // ノート移動モード (単一選択のみ対応中)
-            if (selectedNote != null && dragNoteOriginal != null && selectedNotesList.size() == 1) {
-                int dx = e.getX() - dragStartPoint.x;
-                int dy = e.getY() - dragStartPoint.y;
-                long newStartTime = xToTick(tickToX(dragNoteOriginal.getStartTimeTicks()) + dx);
-                int newPitch = yToPitch(pitchToY(dragNoteOriginal.getPitch()) + dy);
-                if (newPitch < MIN_PITCH) newPitch = MIN_PITCH;
-                if (newPitch > MAX_PITCH) newPitch = MAX_PITCH;
-                newStartTime = Math.max(0, newStartTime);
-                if (newPitch != -1) selectedNote.setPitch(newPitch);
-                selectedNote.setStartTimeTicks(newStartTime);
+            // ノート移動モード
+            int dx = e.getX() - dragStartPoint.x;
+            int dy = e.getY() - dragStartPoint.y;
+
+            if (selectedNote != null && dragNoteOriginal != null) {
+                // ピッチと時間軸の移動量を計算
+                int originalPitchY = pitchToY(dragNoteOriginal.getPitch());
+                int newPitchY = originalPitchY + dy;
+                int newPitch = yToPitch(newPitchY);
+                if (newPitch == -1) newPitch = dragNoteOriginal.getPitch();
+                int pitchDiff = newPitch - dragNoteOriginal.getPitch();
+
+                long originalStartX = tickToX(dragNoteOriginal.getStartTimeTicks());
+                long newStartX = originalStartX + dx;
+                long newStartTick = xToTick((int)newStartX);
+                long tickDiff = newStartTick - dragNoteOriginal.getStartTimeTicks();
+
+                // 範囲制限：すべてのノートが境界を越えないようにする
+                long minStartTick = Long.MAX_VALUE;
+                int minPitchVal = Integer.MAX_VALUE;
+                int maxPitchVal = Integer.MIN_VALUE;
+
+                for (Note n : dragNotesOriginal) {
+                    minStartTick = Math.min(minStartTick, n.getStartTimeTicks());
+                    minPitchVal = Math.min(minPitchVal, n.getPitch());
+                    maxPitchVal = Math.max(maxPitchVal, n.getPitch());
+                }
+
+                if (minStartTick + tickDiff < 0) {
+                    tickDiff = -minStartTick;
+                }
+                if (minPitchVal + pitchDiff < MIN_PITCH) {
+                    pitchDiff = MIN_PITCH - minPitchVal;
+                }
+                if (maxPitchVal + pitchDiff > MAX_PITCH) {
+                    pitchDiff = MAX_PITCH - maxPitchVal;
+                }
+
+                // 全ての選択されたノートを移動
+                for (int i = 0; i < selectedNotesList.size(); i++) {
+                    Note n = selectedNotesList.get(i);
+                    Note orig = dragNotesOriginal.get(i);
+                    n.setStartTimeTicks(orig.getStartTimeTicks() + tickDiff);
+                    n.setPitch(orig.getPitch() + pitchDiff);
+                }
+
                 if (parentFrame != null) parentFrame.updateNoteInfo(selectedNote);
                 repaint();
-            } // TODO: 複数ノート移動
+            }
         } else if (currentDragMode == DragMode.RESIZE_END && selectedNote != null && dragNoteOriginal != null && selectedNotesList.size() == 1) {
             // ノートリサイズモード (単一選択のみ)
             int dx = e.getX() - dragStartPoint.x;
@@ -1182,10 +1345,10 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     @Override
     public void mouseWheelMoved(MouseWheelEvent e) {
         if (e.isControlDown() && !e.isShiftDown()) { // Horizontal zoom
-            if (e.getWheelRotation() < 0) zoomInHorizontal(); else zoomOutHorizontal();
+            if (e.getWheelRotation() < 0) zoomInHorizontal(e.getPoint()); else zoomOutHorizontal(e.getPoint());
             e.consume();
         } else if (e.isControlDown() && e.isShiftDown()) { // Vertical zoom
-            if (e.getWheelRotation() < 0) zoomInVertical(); else zoomOutVertical();
+            if (e.getWheelRotation() < 0) zoomInVertical(e.getPoint()); else zoomOutVertical(e.getPoint());
             e.consume();
         } else { // Default scroll behavior
             JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
@@ -1209,11 +1372,15 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     @Override
     public void mouseMoved(MouseEvent e) {
+        JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
+        int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
+        int localX = e.getX() - offsetX;
+
         boolean onResizeHandle = false;
         if (selectedNote != null && selectedNotesList.size() == 1) {
             int noteEndX = tickToX(selectedNote.getStartTimeTicks() + selectedNote.getDurationTicks());
             int noteY = pitchToY(selectedNote.getPitch());
-            if (Math.abs(e.getX() - noteEndX) < resizeHandleSensitivity && e.getY() >= noteY && e.getY() < noteY + noteHeight) {
+            if (localX >= KEY_WIDTH && Math.abs(e.getX() - noteEndX) < resizeHandleSensitivity && e.getY() >= noteY && e.getY() < noteY + noteHeight) {
                 onResizeHandle = true;
             }
         }

@@ -1,20 +1,32 @@
 package org.codesfactory.api;
 
+import com.google.gson.annotations.SerializedName;
 import java.util.List;
 
 public class GenerateMeta {
+    @SerializedName("model_type")
     private String modelType;
-    private List<Integer> list;
+    
+    @SerializedName("program")
+    private List<Object> program; // Supports instrument names e.g., "PIANO" or MIDI programs e.g., 0
+    
+    @SerializedName("tempo")
     private int tempo;
-    private String name;
-    private double p;
-    private double temperature;
+    
+    @SerializedName("task")
+    private String task;
+    
+    @SerializedName("p")
+    private double p = 0.95;
+    
+    @SerializedName("temperature")
+    private double temperature = 1.0;
 
-    public GenerateMeta(String modelType, List<Integer> list, int tempo, String name) {
+    public GenerateMeta(String modelType, List<Object> program, int tempo, String task) {
         this.modelType = modelType;
-        this.list = list;
+        this.program = program;
         this.tempo = tempo;
-        this.name = name;
+        this.task = task;
     }
 
     public void setP(double p) {
