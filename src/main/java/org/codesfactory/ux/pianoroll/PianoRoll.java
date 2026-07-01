@@ -52,6 +52,94 @@ public class PianoRoll extends JFrame {
 
     private File currentFile = null;
 
+    // --- Multi-track Connection Fields ---
+    private Track linkedTrack;
+    private MidiRegion linkedRegion;
+    private Runnable onCloseCallback;
+
+    // --- Constructor for Multi-track Sub-window ---
+    public PianoRoll(Track track, MidiRegion region, Runnable onCloseCallback) {
+        this.linkedTrack = track;
+        this.linkedRegion = region;
+        this.onCloseCallback = onCloseCallback;
+
+        setTitle("Piano Roll - " + track.getName());
+        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE); // Close sub-window only
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                if (onCloseCallback != null) {
+                    onCloseCallback.run();
+                }
+                if (playbackManager != null) {
+                    playbackManager.close();
+                }
+                dispose();
+            }
+        });
+
+        setLayout(new BorderLayout());
+
+        // Initialize core components
+        pianoRollView = new PianoRollView(this);
+        playbackManager = new PlaybackManager(pianoRollView);
+        mozartAPIClient = new MozartAPIClient();
+
+        // Bind shared notes list from parent track
+        pianoRollView.setNotesList(track.getNotes());
+
+        // Setup UI components
+        scrollPane = new JScrollPane(pianoRollView);
+        scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_ALWAYS);
+        scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_ALWAYS);
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
+        scrollPane.getHorizontalScrollBar().setUnitIncrement(30);
+
+        // Create UI elements
+        JToolBar toolBar = createToolbar();
+        JPanel statusPanel = createStatusPanel();
+        infoLabel = new JLabel("No note selected.");
+        statusPanel.add(infoLabel);
+        JMenuBar menuBar = createMenuBar();
+        undoItem = menuBar.getMenu(1).getItem(0);
+        redoItem = menuBar.getMenu(1).getItem(1);
+        deleteAllItem = menuBar.getMenu(1).getItem(3);
+
+        add(toolBar, BorderLayout.NORTH);
+        add(scrollPane, BorderLayout.CENTER);
+        add(statusPanel, BorderLayout.SOUTH);
+        setJMenuBar(menuBar);
+
+        // Initialize File Chooser
+        fileChooser = new JFileChooser();
+        fileChooser.setFileFilter(new FileNameExtensionFilter("MIDI Files (*.mid, *.midi)", "mid", "midi"));
+
+        // Window size and location
+        setSize(1100, 700);
+        setLocationRelativeTo(null);
+
+        // Calculate loop measures based on region start/end ticks
+        int ppqn = pianoRollView.getPpqn();
+        int beatsPerMeasure = pianoRollView.getBeatsPerMeasure();
+        int ticksPerMeasure = ppqn * beatsPerMeasure;
+        int startMeasure = (int) (region.getStartTick() / ticksPerMeasure) + 1;
+        int endMeasure = (int) (region.getEndTick() / ticksPerMeasure);
+
+        loopStartField.setText(String.valueOf(startMeasure));
+        loopEndField.setText(String.valueOf(endMeasure));
+
+        // Enforce loop range & position
+        pianoRollView.setLoopRange(region.getStartTick(), region.getEndTick());
+        playbackManager.setLoop(region.getStartTick(), region.getEndTick());
+        playbackManager.setTickPosition(region.getStartTick());
+
+        // Final setup
+        updateUndoRedoMenuItems(false, false);
+        updateLoopButtonText();
+        updateTempoField();
+        loadModels();
+    }
+
     // --- Constructor ---
     public PianoRoll(boolean isFullScreen, int width, int height) {
         setTitle("COMPASS");

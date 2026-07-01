@@ -46,7 +46,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private int ppqn = MidiHandler.DEFAULT_PPQN;
     private int beatsPerMeasure = 4;
     private int beatUnit = 4;
-    private final List<Note> notes = new ArrayList<>(); // ★ finalにして再代入を防ぐ
+    private List<Note> notes = new ArrayList<>(); // Remove final to allow track binding
     private long totalTicks = (long) ppqn * beatsPerMeasure * 256;
 
     // --- Selection & Interaction State ---
@@ -111,6 +111,11 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     }
 
     // --- Public Methods for Interaction & Data ---
+
+    public void setNotesList(List<Note> newNotes) {
+        this.notes = newNotes;
+        repaint();
+    }
 
     public UndoManager getUndoManager() {
         return this.undoManager;

@@ -35,7 +35,7 @@ public class MidiHandler {
         float tempo = 120.0f; // Default tempo
         boolean tempoFound = false;
 
-        for (Track track : sequence.getTracks()) {
+        for (javax.sound.midi.Track track : sequence.getTracks()) {
             for (int i = 0; i < track.size(); i++) {
                 MidiEvent event = track.get(i);
                 MidiMessage message = event.getMessage();
@@ -77,7 +77,7 @@ public class MidiHandler {
         return new MidiData(notes, ppqn, maxTick, tempo);
     }
 
-    private static long findNoteOffDuration(Track track, int startIndex, int channel, int pitch, long noteOnTick) {
+    private static long findNoteOffDuration(javax.sound.midi.Track track, int startIndex, int channel, int pitch, long noteOnTick) {
         for (int i = startIndex; i < track.size(); i++) {
             MidiEvent event = track.get(i);
             MidiMessage message = event.getMessage();
@@ -95,7 +95,7 @@ public class MidiHandler {
 
     public static void saveMidiFile(File file, List<Note> notes, int ppqn, float tempo) throws InvalidMidiDataException, IOException {
         Sequence sequence = new Sequence(Sequence.PPQ, ppqn);
-        Track track = sequence.createTrack();
+        javax.sound.midi.Track track = sequence.createTrack();
 
         // Add tempo event at the beginning of the track
         try {
@@ -138,7 +138,7 @@ public class MidiHandler {
         float tempo = 120.0f; // Default tempo
         boolean tempoFound = false;
 
-        for (Track track : sequence.getTracks()) {
+        for (javax.sound.midi.Track track : sequence.getTracks()) {
             for (int i = 0; i < track.size(); i++) {
                 MidiEvent event = track.get(i);
                 MidiMessage message = event.getMessage();

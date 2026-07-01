@@ -73,7 +73,7 @@ public class PlaybackManager {
 
         try {
             sequence = new Sequence(Sequence.PPQ, ppqn);
-            Track track = sequence.createTrack();
+            javax.sound.midi.Track track = sequence.createTrack();
 
             if (notes != null) {
                 for (Note note : notes) {
@@ -204,6 +204,10 @@ public class PlaybackManager {
 
     public Sequence getSequence() {
         return sequence;
+    }
+
+    public Sequencer getSequencer() {
+        return sequencer;
     }
 
     public float getTempo() {
