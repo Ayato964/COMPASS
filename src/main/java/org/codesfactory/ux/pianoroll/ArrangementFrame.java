@@ -12,6 +12,7 @@ public class ArrangementFrame extends JFrame {
     
     private final List<Track> tracks = new ArrayList<>();
     private final PlaybackManager playbackManager; // メインシーケンサ用
+    private final List<PianoRoll> activePianoRolls = new ArrayList<>();
     
     private final JPanel trackHeaderPanel;
     private final TimelinePanel timelinePanel;
@@ -29,6 +30,7 @@ public class ArrangementFrame extends JFrame {
     private double zoomX = 0.15; // 横方向のズーム率 (1 tick あたりのピクセル数)
     
     private Track selectedTrack = null;
+    private final java.util.Set<Track> selectedTracks = new java.util.HashSet<>();
     private MidiRegion selectedRegion = null;
     
     public ArrangementFrame() {
@@ -41,6 +43,7 @@ public class ArrangementFrame extends JFrame {
         Track defaultTrack = new Track("Track 1");
         tracks.add(defaultTrack);
         selectedTrack = defaultTrack;
+        selectedTracks.add(defaultTrack);
         
         // PlaybackManagerの初期化
         playbackManager = new PlaybackManager(null); // Timeline用の再生ヘッド同期は別で行う
@@ -75,6 +78,17 @@ public class ArrangementFrame extends JFrame {
         toolBar.addSeparator();
         toolBar.add(new JLabel(" Grid Snap: "));
         toolBar.add(quantizeComboBox);
+        toolBar.addSeparator();
+        toolBar.add(new JLabel(" Zoom: "));
+        JButton zoomInBtn = new JButton("↔+");
+        JButton zoomOutBtn = new JButton("↔-");
+        zoomInBtn.setFocusPainted(false);
+        zoomOutBtn.setFocusPainted(false);
+        zoomInBtn.addActionListener(e -> zoomIn(null));
+        zoomOutBtn.addActionListener(e -> zoomOut(null));
+        toolBar.add(zoomInBtn);
+        toolBar.add(Box.createHorizontalStrut(2));
+        toolBar.add(zoomOutBtn);
         
         add(toolBar, BorderLayout.NORTH);
         
@@ -107,6 +121,8 @@ public class ArrangementFrame extends JFrame {
             Track newTrack = new Track("Track " + (tracks.size() + 1));
             tracks.add(newTrack);
             selectedTrack = newTrack;
+            selectedTracks.clear();
+            selectedTracks.add(newTrack);
             rebuildTrackHeaders();
             timelinePanel.recalculateSize();
             scrollPane.revalidate();
@@ -114,13 +130,17 @@ public class ArrangementFrame extends JFrame {
         });
         
         deleteTrackButton.addActionListener(e -> {
-            if (tracks.size() > 1 && selectedTrack != null) {
-                tracks.remove(selectedTrack);
+            if (tracks.size() > selectedTracks.size()) {
+                tracks.removeAll(selectedTracks);
+                selectedTracks.clear();
                 selectedTrack = tracks.get(tracks.size() - 1);
+                selectedTracks.add(selectedTrack);
                 rebuildTrackHeaders();
                 timelinePanel.recalculateSize();
                 scrollPane.revalidate();
                 scrollPane.repaint();
+            } else {
+                JOptionPane.showMessageDialog(ArrangementFrame.this, "Cannot delete all tracks.", "Warning", JOptionPane.WARNING_MESSAGE);
             }
         });
         
@@ -135,7 +155,11 @@ public class ArrangementFrame extends JFrame {
         // 再生位置の定期更新タイマー (再生ヘッドのアニメーション用)
         Timer repaintTimer = new Timer(30, e -> {
             if (playbackManager.getSequencer() != null && playbackManager.getSequencer().isRunning()) {
+                long currentTick = playbackManager.getSequencer().getTickPosition();
                 timelinePanel.repaint();
+                for (PianoRoll pr : activePianoRolls) {
+                    pr.updatePlaybackHeadOnly(currentTick);
+                }
             }
         });
         repaintTimer.start();
@@ -189,6 +213,16 @@ public class ArrangementFrame extends JFrame {
             }
         });
 
+        mainContent.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_A, InputEvent.CTRL_DOWN_MASK), "selectAllTracks"
+        );
+        mainContent.getActionMap().put("selectAllTracks", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                selectAllTracks();
+            }
+        });
+
         // ウィンドウクローズ時にMIDI解放
         addWindowListener(new WindowAdapter() {
             @Override
@@ -225,7 +259,7 @@ public class ArrangementFrame extends JFrame {
             header.setMaximumSize(new Dimension(220, trackHeight));
             header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 1, Color.DARK_GRAY));
             
-            if (track == selectedTrack) {
+            if (selectedTracks.contains(track)) {
                 header.setBackground(new Color(60, 63, 65));
             } else {
                 header.setBackground(new Color(43, 43, 43));
@@ -246,7 +280,7 @@ public class ArrangementFrame extends JFrame {
             });
             
             // 楽器
-            String[] instruments = {"PIANO", "DRUMS", "BASS", "SYNTH", "GUITAR", "VIOLIN"};
+            String[] instruments = {"PIANO", "SAX", "DRUMS", "BASS", "SYNTH", "GUITAR", "VIOLIN"};
             JComboBox<String> instCombo = new JComboBox<>(instruments);
             instCombo.setSelectedItem(track.getInstrument());
             instCombo.addActionListener(e -> track.setInstrument((String) instCombo.getSelectedItem()));
@@ -276,20 +310,41 @@ public class ArrangementFrame extends JFrame {
             JPopupMenu trackPopupMenu = new JPopupMenu();
             JMenuItem deleteTrackItem = new JMenuItem("Delete Track");
             deleteTrackItem.addActionListener(ev -> {
-                if (tracks.size() > 1) {
-                    tracks.remove(track);
-                    if (selectedTrack == track) {
-                        selectedTrack = tracks.get(tracks.size() - 1);
-                    }
+                if (tracks.size() > selectedTracks.size()) {
+                    tracks.removeAll(selectedTracks);
+                    selectedTracks.clear();
+                    selectedTrack = tracks.get(tracks.size() - 1);
+                    selectedTracks.add(selectedTrack);
                     rebuildTrackHeaders();
                     timelinePanel.recalculateSize();
                     scrollPane.revalidate();
                     scrollPane.repaint();
                 } else {
-                    JOptionPane.showMessageDialog(ArrangementFrame.this, "Cannot delete the last track.", "Warning", JOptionPane.WARNING_MESSAGE);
+                    JOptionPane.showMessageDialog(ArrangementFrame.this, "Cannot delete all tracks.", "Warning", JOptionPane.WARNING_MESSAGE);
                 }
             });
             trackPopupMenu.add(deleteTrackItem);
+
+            // トラックの色変更メニューを追加
+            JMenu colorSubMenu = new JMenu("Change Track Color");
+            java.util.Map<String, java.awt.Color> colorMap = new java.util.LinkedHashMap<>();
+            colorMap.put("Purple (Default)", new java.awt.Color(78, 59, 120));
+            colorMap.put("Red", new java.awt.Color(168, 50, 50));
+            colorMap.put("Blue", new java.awt.Color(50, 94, 168));
+            colorMap.put("Green", new java.awt.Color(50, 168, 82));
+            colorMap.put("Yellow", new java.awt.Color(168, 160, 50));
+            colorMap.put("Orange", new java.awt.Color(168, 101, 50));
+
+            for (java.util.Map.Entry<String, java.awt.Color> entry : colorMap.entrySet()) {
+                JMenuItem colorItem = new JMenuItem(entry.getKey());
+                colorItem.addActionListener(ev -> {
+                    track.setColor(entry.getValue());
+                    rebuildTrackHeaders();
+                    timelinePanel.repaint();
+                });
+                colorSubMenu.add(colorItem);
+            }
+            trackPopupMenu.add(colorSubMenu);
 
             header.addMouseListener(new MouseAdapter() {
                 private void checkPopup(MouseEvent e) {
@@ -301,6 +356,8 @@ public class ArrangementFrame extends JFrame {
                 public void mousePressed(MouseEvent e) {
                     ArrangementFrame.this.requestFocusInWindow();
                     selectedTrack = track;
+                    selectedTracks.clear();
+                    selectedTracks.add(track);
                     rebuildTrackHeaders();
                     timelinePanel.repaint();
                     checkPopup(e);
@@ -373,11 +430,20 @@ public class ArrangementFrame extends JFrame {
     
     private void pausePlayback() {
         playbackManager.pause();
+        if (playbackManager.getSequencer() != null) {
+            long tick = playbackManager.getSequencer().getTickPosition();
+            for (PianoRoll pr : activePianoRolls) {
+                pr.updatePlaybackHeadOnly(tick);
+            }
+        }
     }
     
     private void stopPlayback() {
         playbackManager.stop();
         timelinePanel.repaint();
+        for (PianoRoll pr : activePianoRolls) {
+            pr.updatePlaybackHeadOnly(0);
+        }
     }
     
     private void updateTempo() {
@@ -406,6 +472,8 @@ public class ArrangementFrame extends JFrame {
         int idx = tracks.indexOf(selectedTrack);
         if (idx > 0) {
             selectedTrack = tracks.get(idx - 1);
+            selectedTracks.clear();
+            selectedTracks.add(selectedTrack);
             rebuildTrackHeaders();
             timelinePanel.repaint();
         }
@@ -416,9 +484,18 @@ public class ArrangementFrame extends JFrame {
         int idx = tracks.indexOf(selectedTrack);
         if (idx >= 0 && idx < tracks.size() - 1) {
             selectedTrack = tracks.get(idx + 1);
+            selectedTracks.clear();
+            selectedTracks.add(selectedTrack);
             rebuildTrackHeaders();
             timelinePanel.repaint();
         }
+    }
+
+    private void selectAllTracks() {
+        selectedTracks.clear();
+        selectedTracks.addAll(tracks);
+        rebuildTrackHeaders();
+        timelinePanel.repaint();
     }
     
     // --- タイムライン描画 & 操作用パネル ---
@@ -428,9 +505,24 @@ public class ArrangementFrame extends JFrame {
         private Point dragCurrentPoint = null;
         private boolean isDrawingRegion = false;
         
+        private boolean isDraggingRegionForMove = false;
+        private long dragOffsetTicks = 0;
+        private long dragStartTickOffset = 0;
+        
         public TimelinePanel() {
             recalculateSize();
             setBackground(new Color(30, 30, 30));
+            
+            addMouseWheelListener(e -> {
+                if (e.isControlDown()) {
+                    if (e.getWheelRotation() < 0) {
+                        zoomIn(e.getPoint());
+                    } else {
+                        zoomOut(e.getPoint());
+                    }
+                    e.consume();
+                }
+            });
             
             MouseAdapter mouseAdapter = new MouseAdapter() {
                 @Override
@@ -461,17 +553,24 @@ public class ArrangementFrame extends JFrame {
                         System.out.println("Arrangement: Selected region " + selectedRegion.getId());
                     }
                     
+                    // ダブルクリックでピアノロールを開く
+                    if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
+                        if (selectedRegion != null) {
+                            openPianoRoll(track, selectedRegion);
+                        }
+                    }
                     // Ctrl + 左クリック + ドラッグで MIDI リージョンを描画
-                    if (e.isControlDown() && SwingUtilities.isLeftMouseButton(e)) {
+                    else if (e.isControlDown() && SwingUtilities.isLeftMouseButton(e)) {
                         dragStartPoint = e.getPoint();
                         dragCurrentPoint = e.getPoint();
                         isDrawingRegion = true;
                         setCursor(Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
-                    } else if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
-                        // ダブルクリックでピアノロールを開く
-                        if (selectedRegion != null) {
-                            openPianoRoll(track, selectedRegion);
-                        }
+                    } else if (!e.isControlDown() && !e.isShiftDown() && SwingUtilities.isLeftMouseButton(e) && selectedRegion != null) {
+                        // ドラッグ移動の開始
+                        isDraggingRegionForMove = true;
+                        dragStartTickOffset = clickTick - selectedRegion.getStartTick();
+                        dragOffsetTicks = 0;
+                        setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                     }
                     repaint();
                 }
@@ -480,6 +579,14 @@ public class ArrangementFrame extends JFrame {
                 public void mouseDragged(MouseEvent e) {
                     if (isDrawingRegion) {
                         dragCurrentPoint = e.getPoint();
+                        repaint();
+                    } else if (isDraggingRegionForMove && selectedRegion != null) {
+                        long currentTick = (long) (e.getX() / zoomX);
+                        long rawStartTick = currentTick - dragStartTickOffset;
+                        long snapTicks = getSnapTicks();
+                        long newStartTick = Math.max(0, (rawStartTick / snapTicks) * snapTicks);
+                        
+                        dragOffsetTicks = newStartTick - selectedRegion.getStartTick();
                         repaint();
                     }
                 }
@@ -495,16 +602,17 @@ public class ArrangementFrame extends JFrame {
                             if (trackIdx >= 0 && trackIdx < tracks.size()) {
                                 Track track = tracks.get(trackIdx);
                                 
-                                // グリッド（1小節）にスナップさせてリージョンを作成
+                                // グリッドにスナップさせてリージョンを作成
                                 long t1 = (long) (dragStartPoint.x / zoomX);
                                 long t2 = (long) (dragCurrentPoint.x / zoomX);
                                 
                                 long startTick = Math.min(t1, t2);
                                 long endTick = Math.max(t1, t2);
                                 
-                                // 1小節単位にスナップ
-                                startTick = (startTick / ticksPerMeasure) * ticksPerMeasure;
-                                endTick = ((endTick + ticksPerMeasure - 1) / ticksPerMeasure) * ticksPerMeasure;
+                                // スナップ値でスナップ
+                                long snapTicks = getSnapTicks();
+                                startTick = (startTick / snapTicks) * snapTicks;
+                                endTick = ((endTick + snapTicks - 1) / snapTicks) * snapTicks;
                                 
                                 if (startTick < endTick) {
                                     // 既存のリージョンとの重複チェック (重複させない仕様)
@@ -518,6 +626,32 @@ public class ArrangementFrame extends JFrame {
                         }
                         dragStartPoint = null;
                         dragCurrentPoint = null;
+                        repaint();
+                    } else if (isDraggingRegionForMove && selectedRegion != null) {
+                        isDraggingRegionForMove = false;
+                        setCursor(Cursor.getDefaultCursor());
+                        
+                        if (dragOffsetTicks != 0) {
+                            long newStart = selectedRegion.getStartTick() + dragOffsetTicks;
+                            long newEnd = selectedRegion.getEndTick() + dragOffsetTicks;
+                            
+                            if (!hasOverlapExcluding(selectedTrack, newStart, newEnd, selectedRegion)) {
+                                long oldStart = selectedRegion.getStartTick();
+                                long oldEnd = selectedRegion.getEndTick();
+                                
+                                // ノートの位置も平行移動
+                                for (Note note : selectedTrack.getNotes()) {
+                                    if (note.getStartTimeTicks() >= oldStart && note.getStartTimeTicks() < oldEnd) {
+                                        note.setStartTimeTicks(note.getStartTimeTicks() + dragOffsetTicks);
+                                    }
+                                }
+                                
+                                selectedRegion.setStartTick(newStart);
+                                selectedRegion.setEndTick(newEnd);
+                                System.out.println("Arrangement: Moved region " + selectedRegion.getId() + " by " + dragOffsetTicks + " ticks.");
+                            }
+                        }
+                        dragOffsetTicks = 0;
                         repaint();
                     }
                 }
@@ -541,6 +675,33 @@ public class ArrangementFrame extends JFrame {
                 }
             }
             return false;
+        }
+        
+        private boolean hasOverlapExcluding(Track track, long start, long end, MidiRegion excludeRegion) {
+            for (MidiRegion r : track.getRegions()) {
+                if (r == excludeRegion) continue;
+                if (start < r.getEndTick() && end > r.getStartTick()) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private long getSnapTicks() {
+            int beatsPerMeasure = 4;
+            int ticksPerMeasure = ppqn * beatsPerMeasure;
+            
+            String selected = (String) quantizeComboBox.getSelectedItem();
+            if (selected == null) return ticksPerMeasure;
+            
+            switch (selected) {
+                case "1 Measure": return ticksPerMeasure;
+                case "1/2": return ticksPerMeasure / 2;
+                case "1/4": return ticksPerMeasure / 4;
+                case "1/8": return ticksPerMeasure / 8;
+                case "1/16": return ticksPerMeasure / 16;
+                default: return ticksPerMeasure;
+            }
         }
         
         private MidiRegion findRegionAt(Track track, long tick) {
@@ -581,19 +742,23 @@ public class ArrangementFrame extends JFrame {
                 int trackY = rulerHeight + (t * trackHeight);
                 
                 // 選択されているトラックの背景を少し明るく
-                if (track == selectedTrack) {
+                if (selectedTracks.contains(track)) {
                     g2.setColor(new Color(255, 255, 255, 10));
                     g2.fillRect(0, trackY, width, trackHeight);
                 }
                 
                 for (MidiRegion region : track.getRegions()) {
-                    int rx = (int) (region.getStartTick() * zoomX);
+                    long startTick = region.getStartTick();
+                    if (isDraggingRegionForMove && region == selectedRegion) {
+                        startTick += dragOffsetTicks;
+                    }
+                    int rx = (int) (startTick * zoomX);
                     int rw = (int) (region.getLengthTicks() * zoomX);
                     int ry = trackY + 10;
                     int rh = trackHeight - 20;
                     
-                    // ブロックの塗りつぶし (Cubase風の青紫/パープル)
-                    g2.setColor(new Color(78, 59, 120));
+                    // ブロックの塗りつぶし
+                    g2.setColor(track.getColor());
                     g2.fillRoundRect(rx, ry, rw, rh, 8, 8);
                     
                     // 枠線 (選択されている場合は黄色い太枠にする)
@@ -601,7 +766,7 @@ public class ArrangementFrame extends JFrame {
                         g2.setColor(new Color(255, 215, 0)); // 明るいゴールド/イエロー
                         g2.setStroke(new BasicStroke(2.5f));
                     } else {
-                        g2.setColor(new Color(130, 110, 180));
+                        g2.setColor(track.getColor().brighter());
                         g2.setStroke(new BasicStroke(2));
                     }
                     g2.drawRoundRect(rx, ry, rw, rh, 8, 8);
@@ -627,7 +792,11 @@ public class ArrangementFrame extends JFrame {
                         int pitchRange = Math.max(1, maxPitch - minPitch);
                         
                         for (Note note : regionNotes) {
-                            int nx = (int) (note.getStartTimeTicks() * zoomX);
+                            long noteStart = note.getStartTimeTicks();
+                            if (isDraggingRegionForMove && region == selectedRegion) {
+                                noteStart += dragOffsetTicks;
+                            }
+                            int nx = (int) (noteStart * zoomX);
                             int nw = (int) (note.getDurationTicks() * zoomX);
                             double pitchRatio = (double) (note.getPitch() - minPitch) / pitchRange;
                             int ny = ry + rh - 15 - (int) (pitchRatio * (rh - 25));
@@ -708,11 +877,50 @@ public class ArrangementFrame extends JFrame {
     private void openPianoRoll(Track track, MidiRegion region) {
         System.out.println("Arrangement: Opening Piano Roll for " + track.getName() + " at region " + region);
         
-        PianoRoll pianoRoll = new PianoRoll(track, region, () -> {
+        PianoRoll pianoRoll = new PianoRoll(track, region, tracks, () -> {
             timelinePanel.repaint();
         });
         
+        activePianoRolls.add(pianoRoll);
+        pianoRoll.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                activePianoRolls.remove(pianoRoll);
+            }
+        });
+        
         pianoRoll.setVisible(true);
+    }
+
+    public void zoomIn(Point mousePoint) {
+        zoomXAt(mousePoint, 1.15);
+    }
+    
+    public void zoomOut(Point mousePoint) {
+        zoomXAt(mousePoint, 1.0 / 1.15);
+    }
+    
+    private void zoomXAt(Point mousePoint, double factor) {
+        double oldZoomX = zoomX;
+        zoomX *= factor;
+        zoomX = Math.max(0.01, Math.min(2.0, zoomX));
+        
+        timelinePanel.recalculateSize();
+        
+        if (mousePoint != null) {
+            JViewport viewport = (JViewport) timelinePanel.getParent();
+            Point viewPos = viewport.getViewPosition();
+            long mouseTick = (long) (mousePoint.x / oldZoomX);
+            int newMouseX = (int) (mouseTick * zoomX);
+            int viewportMouseX = mousePoint.x - viewPos.x;
+            int newViewX = newMouseX - viewportMouseX;
+            int maxViewX = timelinePanel.getPreferredSize().width - viewport.getWidth();
+            newViewX = Math.max(0, Math.min(newViewX, maxViewX));
+            viewPos.x = newViewX;
+            viewport.setViewPosition(viewPos);
+        }
+        
+        timelinePanel.repaint();
     }
     
     public static void main(String[] args) {

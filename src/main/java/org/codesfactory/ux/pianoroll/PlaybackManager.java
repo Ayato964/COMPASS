@@ -235,24 +235,44 @@ public class PlaybackManager {
      */
     // PlaybackManager.java
     public void setLoop(long startTick, long endTick) {
-        if (sequencer != null && sequence != null) { // ★ sequence の null チェック追加
+        if (sequencer != null && sequence != null) {
             long sequenceLength = sequence.getTickLength();
-            if (sequenceLength <= 0) { // シーケンス長が0または負ならループ設定不可
+            if (sequenceLength <= 0) {
                 System.err.println("PlaybackManager: Cannot set loop, sequence length is not positive: " + sequenceLength);
                 clearLoop();
                 return;
             }
 
             // startTick と endTick をシーケンス長内に丸める
-            long validStartTick = Math.max(0, Math.min(startTick, sequenceLength -1)); // 終了点は含まないので -1
-            long validEndTick = Math.max(validStartTick +1 , Math.min(endTick, sequenceLength)); // 開始点より大きく、シーケンス長以内
+            long validStartTick = Math.max(0, Math.min(startTick, sequenceLength - 1));
+            long validEndTick = Math.max(validStartTick + 1, Math.min(endTick, sequenceLength));
 
             if (validStartTick < validEndTick) {
-                sequencer.setLoopStartPoint(validStartTick);
-                sequencer.setLoopEndPoint(validEndTick); // EndPoint は通常そのTickの手前まで
-                sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
-                this.isLoopingEnabled = true;
-                System.out.println("PlaybackManager: Loop set from " + validStartTick + " to " + validEndTick + " (Sequence length: " + sequenceLength + ")");
+                try {
+                    sequencer.setLoopStartPoint(validStartTick);
+                    sequencer.setLoopEndPoint(validEndTick);
+                    sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
+                    this.isLoopingEnabled = true;
+                    System.out.println("PlaybackManager: Loop set from " + validStartTick + " to " + validEndTick + " (Sequence length: " + sequenceLength + ")");
+                } catch (IllegalArgumentException e) {
+                    System.err.println("PlaybackManager: Failed to set loop points on sequencer: " + e.getMessage() + ". Retrying after delay...");
+                    long finalStart = validStartTick;
+                    long finalEnd = validEndTick;
+                    SwingUtilities.invokeLater(() -> {
+                        try {
+                            if (sequencer != null && sequence != null) {
+                                sequencer.setLoopStartPoint(finalStart);
+                                sequencer.setLoopEndPoint(finalEnd);
+                                sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
+                                this.isLoopingEnabled = true;
+                                System.out.println("PlaybackManager: Loop set successfully on retry.");
+                            }
+                        } catch (IllegalArgumentException ex) {
+                            System.err.println("PlaybackManager: Loop retry also failed: " + ex.getMessage());
+                            clearLoop();
+                        }
+                    });
+                }
             } else {
                 System.err.println("PlaybackManager: Invalid loop points after clamping. start=" + validStartTick + ", end=" + validEndTick);
                 clearLoop();

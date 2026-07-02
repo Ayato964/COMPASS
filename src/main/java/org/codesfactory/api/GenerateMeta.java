@@ -69,7 +69,14 @@ public class GenerateMeta {
         this.thinking = thinking;
     }
 
+    @SerializedName("cot_temperature")
+    private Double cotTemperature;
+
     public void setGenfieldMeasure(Integer genfieldMeasure) {
         this.genfieldMeasure = genfieldMeasure;
+    }
+
+    public void setCotTemperature(Double cotTemperature) {
+        this.cotTemperature = cotTemperature;
     }
 }

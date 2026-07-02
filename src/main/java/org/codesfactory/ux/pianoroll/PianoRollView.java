@@ -48,6 +48,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private int beatUnit = 4;
     private List<Note> notes = new ArrayList<>(); // Remove final to allow track binding
     private long totalTicks = (long) ppqn * beatsPerMeasure * 256;
+    private long minTick = 0;
+    private long maxTick = -1; // -1 means default (totalTicks)
 
     // --- Selection & Interaction State ---
     private Note selectedNote = null; // 現在主に選択されているノート（単一選択、または複数選択の代表）
@@ -114,6 +116,13 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     public void setNotesList(List<Note> newNotes) {
         this.notes = newNotes;
+        repaint();
+    }
+
+    public void setVisibleTickRange(long startTick, long endTick) {
+        this.minTick = startTick;
+        this.maxTick = endTick;
+        updatePreferredSize();
         repaint();
     }
 
@@ -545,7 +554,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     // --- Private Helper Methods ---
     private void updatePreferredSize() {
-        int preferredWidth = KEY_WIDTH + (int) (totalTicks * pixelsPerTick);
+        long visibleTicks = (maxTick >= 0) ? (maxTick - minTick) : totalTicks;
+        int preferredWidth = KEY_WIDTH + (int) (visibleTicks * pixelsPerTick);
         int preferredHeight = RULER_HEIGHT + totalPitches() * noteHeight + CONTROLLER_LANE_HEIGHT;
         setPreferredSize(new Dimension(preferredWidth, preferredHeight));
         revalidate(); // Tell scroll pane to update
@@ -571,12 +581,12 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     }
 
     private int tickToX(long tick) {
-        return KEY_WIDTH + (int) (tick * pixelsPerTick);
+        return KEY_WIDTH + (int) ((tick - minTick) * pixelsPerTick);
     }
 
     private long xToTick(int x) {
-        if (x < KEY_WIDTH) return 0;
-        return Math.max(0, (long) ((x - KEY_WIDTH) / pixelsPerTick));
+        if (x < KEY_WIDTH) return minTick;
+        return Math.max(minTick, minTick + (long) ((x - KEY_WIDTH) / pixelsPerTick));
     }
 
     private long snapToGrid(long tick, int snapDivision) {
@@ -687,12 +697,17 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         g2d.setFont(new Font("Arial", Font.PLAIN, 10));
         int ticksPerMeasure = ppqn * beatsPerMeasure;
 
-        long startTickRuler = Math.max(0, xToTick(clip.x - KEY_WIDTH)); // ルーラー描画開始Tick
+        long startTickRuler = Math.max(minTick, xToTick(clip.x - KEY_WIDTH)); // ルーラー描画開始Tick
         long endTickRuler = xToTick(clip.x + clip.width - KEY_WIDTH) + ticksPerMeasure; // ルーラー描画終了Tick
-        endTickRuler = Math.min(endTickRuler, totalTicks);
+        long actualMaxTick = (maxTick >= 0) ? maxTick : totalTicks;
+        endTickRuler = Math.min(endTickRuler, actualMaxTick);
+
+        long quantizeStep = ppqn / 4;
+        if (quantizeStep <= 0) quantizeStep = 120;
+        long startLoopTick = (startTickRuler / quantizeStep) * quantizeStep;
 
         // 小節線と拍線の描画
-        for (long currentTick = 0; currentTick <= endTickRuler; currentTick += ppqn / 4) {
+        for (long currentTick = Math.max(minTick, startLoopTick); currentTick <= endTickRuler; currentTick += quantizeStep) {
             if (currentTick < startTickRuler && currentTick + ppqn / 4 < startTickRuler) continue; // 描画範囲より前ならスキップ
 
             int x = tickToX(currentTick);
@@ -786,7 +801,8 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         int ticksPerBeat = ppqn * 4 / beatUnit;
         int ticksPerMeasure = ticksPerBeat * beatsPerMeasure;
         long endTick = xToTick(clip.x + clip.width) + ticksPerBeat;
-        endTick = Math.min(endTick, totalTicks);
+        long actualMaxTick = (maxTick >= 0) ? maxTick : totalTicks;
+        endTick = Math.min(endTick, actualMaxTick);
 
         // Calculate snap interval based on quantize division
         long ticksPerQuantize = (ticksPerBeat * 4) / quantizeDivision;
@@ -797,7 +813,10 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
         double pixelsPerQuantize = ticksPerQuantize * pixelsPerTick;
 
-        for (long currentTick = 0; currentTick <= endTick; currentTick += ticksPerQuantize) {
+        long startTick = xToTick(clip.x);
+        startTick = (startTick / ticksPerQuantize) * ticksPerQuantize;
+
+        for (long currentTick = Math.max(minTick, startTick); currentTick <= endTick; currentTick += ticksPerQuantize) {
             int x = tickToX(currentTick);
             if (x < KEY_WIDTH || x < clip.x || x > clip.x + clip.width) continue;
 
@@ -892,9 +911,13 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         int ticksPerBeat = ppqn * 4 / beatUnit;
         int ticksPerMeasure = ticksPerBeat * beatsPerMeasure;
         long endTick = xToTick(clip.x + clip.width) + ticksPerBeat;
-        endTick = Math.min(endTick, totalTicks);
+        long actualMaxTick = (maxTick >= 0) ? maxTick : totalTicks;
+        endTick = Math.min(endTick, actualMaxTick);
 
-        for (long currentTick = 0; currentTick <= endTick; currentTick += ticksPerBeat / 4) {
+        long startTick = xToTick(clip.x);
+        startTick = (startTick / (ticksPerBeat / 4)) * (ticksPerBeat / 4);
+
+        for (long currentTick = Math.max(minTick, startTick); currentTick <= endTick; currentTick += ticksPerBeat / 4) {
             int xPos = tickToX(currentTick);
             if (xPos < KEY_WIDTH || xPos < clip.x || xPos > clip.x + clip.width) continue;
 
@@ -1469,6 +1492,15 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
 
     @Override
     public void keyPressed(KeyEvent e) {
+        if (e.getKeyCode() == KeyEvent.VK_A && e.isControlDown()) {
+            selectedNotesList.clear();
+            selectedNotesList.addAll(notes);
+            selectedNote = notes.isEmpty() ? null : notes.get(0);
+            repaint();
+            e.consume();
+            return;
+        }
+
         if (e.getKeyCode() == KeyEvent.VK_SPACE) {
             if (parentFrame != null) {
                 parentFrame.togglePlayback();

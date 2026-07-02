@@ -57,7 +57,7 @@ public class MozartAPIClient {
         return list;
     }
 
-    public byte[] generate(File pastMidiFile, File futureMidiFile, File metaFile) throws Exception {
+    public byte[] generate(File pastMidiFile, File futureMidiFile, File conditionsMidiFile, File metaFile) throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
                 .build();
@@ -77,9 +77,14 @@ public class MozartAPIClient {
         } else {
             System.out.println("  - future_midi: NONE / EMPTY");
         }
+        if (conditionsMidiFile != null && conditionsMidiFile.exists() && conditionsMidiFile.length() > 0) {
+            System.out.println("  - conditions_midi: " + conditionsMidiFile.getName() + " (" + conditionsMidiFile.length() + " bytes)");
+        } else {
+            System.out.println("  - conditions_midi: NONE / EMPTY");
+        }
 
         String boundary = "Boundary-" + UUID.randomUUID().toString();
-        byte[] body = createMultipartBody(pastMidiFile, futureMidiFile, metaFile, boundary);
+        byte[] body = createMultipartBody(pastMidiFile, futureMidiFile, conditionsMidiFile, metaFile, boundary);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(BASE_URL + "/generate"))
@@ -99,7 +104,7 @@ public class MozartAPIClient {
         return response.body();
     }
 
-    private byte[] createMultipartBody(File pastMidiFile, File futureMidiFile, File metaFile, String boundary) throws IOException {
+    private byte[] createMultipartBody(File pastMidiFile, File futureMidiFile, File conditionsMidiFile, File metaFile, String boundary) throws IOException {
         List<byte[]> byteArrays = new ArrayList<>();
         String lineSeparator = "\r\n";
 
@@ -131,6 +136,17 @@ public class MozartAPIClient {
             midiHeader.append("Content-Type: audio/midi").append(lineSeparator).append(lineSeparator);
             byteArrays.add(midiHeader.toString().getBytes(StandardCharsets.UTF_8));
             byteArrays.add(Files.readAllBytes(futureMidiFile.toPath()));
+            byteArrays.add(lineSeparator.getBytes(StandardCharsets.UTF_8));
+        }
+
+        // 4. conditions_midi
+        if (conditionsMidiFile != null && conditionsMidiFile.exists() && conditionsMidiFile.length() > 0) {
+            StringBuilder midiHeader = new StringBuilder();
+            midiHeader.append("--").append(boundary).append(lineSeparator);
+            midiHeader.append("Content-Disposition: form-data; name=\"conditions_midi\"; filename=\"").append(conditionsMidiFile.getName()).append("\"").append(lineSeparator);
+            midiHeader.append("Content-Type: audio/midi").append(lineSeparator).append(lineSeparator);
+            byteArrays.add(midiHeader.toString().getBytes(StandardCharsets.UTF_8));
+            byteArrays.add(Files.readAllBytes(conditionsMidiFile.toPath()));
             byteArrays.add(lineSeparator.getBytes(StandardCharsets.UTF_8));
         }
 

@@ -12,6 +12,7 @@ public class Track implements Serializable {
     private String name;
     private String instrument = "PIANO";
     private boolean isMonophonic = false;
+    private java.awt.Color color = new java.awt.Color(78, 59, 120);
     private final List<Note> notes = new ArrayList<>();
     private final List<MidiRegion> regions = new ArrayList<>();
 
@@ -62,6 +63,14 @@ public class Track implements Serializable {
 
     public void removeRegion(MidiRegion region) {
         regions.remove(region);
+    }
+
+    public java.awt.Color getColor() {
+        return color;
+    }
+
+    public void setColor(java.awt.Color color) {
+        this.color = color;
     }
 
     @Override

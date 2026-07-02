@@ -55,12 +55,14 @@ public class PianoRoll extends JFrame {
     // --- Multi-track Connection Fields ---
     private Track linkedTrack;
     private MidiRegion linkedRegion;
+    private List<Track> allTracks;
     private Runnable onCloseCallback;
 
     // --- Constructor for Multi-track Sub-window ---
-    public PianoRoll(Track track, MidiRegion region, Runnable onCloseCallback) {
+    public PianoRoll(Track track, MidiRegion region, List<Track> allTracks, Runnable onCloseCallback) {
         this.linkedTrack = track;
         this.linkedRegion = region;
+        this.allTracks = allTracks;
         this.onCloseCallback = onCloseCallback;
 
         setTitle("Piano Roll - " + track.getName());
@@ -130,6 +132,7 @@ public class PianoRoll extends JFrame {
 
         // Enforce loop range & position
         pianoRollView.setLoopRange(region.getStartTick(), region.getEndTick());
+        pianoRollView.setVisibleTickRange(region.getStartTick(), region.getEndTick());
         playbackManager.setLoop(region.getStartTick(), region.getEndTick());
         playbackManager.setTickPosition(region.getStartTick());
 
@@ -142,6 +145,10 @@ public class PianoRoll extends JFrame {
 
     // --- Constructor ---
     public PianoRoll(boolean isFullScreen, int width, int height) {
+        this.linkedTrack = new Track("Track 1");
+        this.allTracks = new ArrayList<>();
+        this.allTracks.add(linkedTrack);
+
         setTitle("COMPASS");
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         addWindowListener(new java.awt.event.WindowAdapter() {
@@ -243,13 +250,6 @@ public class PianoRoll extends JFrame {
         toolBar.add(stopButton);
         toolBar.add(Box.createHorizontalStrut(10));
 
-        toolBar.add(new JLabel("BPM:"));
-        toolBar.add(Box.createHorizontalStrut(3));
-        tempoField = new JTextField(3);
-        tempoField.setMaximumSize(new Dimension(45, 24));
-        tempoField.setToolTipText("Set Tempo (BPM) and press Enter");
-        tempoField.addActionListener(e -> updateTempoFromField());
-        toolBar.add(tempoField);
         toolBar.add(Box.createHorizontalStrut(15));
 
         toolBar.add(new JLabel("Zoom:"));
@@ -790,26 +790,58 @@ public class PianoRoll extends JFrame {
         boolean hasFuture = !futureNotes.isEmpty();
         boolean hasContext = hasPast || hasFuture;
 
+        // 他トラックの条件コンテキスト (同じ小節範囲のノート)
+        List<Note> conditionsNotes = new ArrayList<>();
+        if (allTracks != null) {
+            for (Track t : allTracks) {
+                if (t != linkedTrack) {
+                    List<Note> tNotes = t.getNotes().stream()
+                            .filter(n -> n.getStartTimeTicks() >= startTick && n.getStartTimeTicks() < endTick)
+                            .collect(Collectors.toList());
+                    conditionsNotes.addAll(tNotes);
+                }
+            }
+        }
+        boolean hasConditions = !conditionsNotes.isEmpty();
+
         // --- Parameters Form UI ---
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(4, 4, 4, 4);
         gbc.fill = GridBagConstraints.HORIZONTAL;
 
+        // p Slider Setup
+        JPanel pPanel = new JPanel(new BorderLayout(5, 0));
+        pPanel.setOpaque(false);
+        JSlider pSlider = new JSlider(0, 100, 95);
+        JLabel pValLabel = new JLabel("0.95");
+        pValLabel.setPreferredSize(new Dimension(30, 20));
+        pSlider.addChangeListener(e -> pValLabel.setText(String.format("%.2f", pSlider.getValue() / 100.0)));
+        pPanel.add(pSlider, BorderLayout.CENTER);
+        pPanel.add(pValLabel, BorderLayout.EAST);
+
         gbc.gridx = 0; gbc.gridy = 0;
-        panel.add(new JLabel("p (Nucleus Sampling):"), gbc);
-        JSpinner pSpinner = new JSpinner(new SpinnerNumberModel(0.95, 0.0, 1.0, 0.01));
+        panel.add(new JLabel("Variety (Diversity):"), gbc);
         gbc.gridx = 1;
-        panel.add(pSpinner, gbc);
+        panel.add(pPanel, gbc);
+
+        // Temperature (Creativity) Slider Setup
+        JPanel tempPanel = new JPanel(new BorderLayout(5, 0));
+        tempPanel.setOpaque(false);
+        JSlider tempSlider = new JSlider(1, 20, 10);
+        JLabel tempValLabel = new JLabel("1.0");
+        tempValLabel.setPreferredSize(new Dimension(30, 20));
+        tempSlider.addChangeListener(e -> tempValLabel.setText(String.format("%.1f", tempSlider.getValue() / 10.0)));
+        tempPanel.add(tempSlider, BorderLayout.CENTER);
+        tempPanel.add(tempValLabel, BorderLayout.EAST);
 
         gbc.gridx = 0; gbc.gridy = 1;
-        panel.add(new JLabel("Temperature:"), gbc);
-        JSpinner tempSpinner = new JSpinner(new SpinnerNumberModel(1.0, 0.1, 2.0, 0.1));
+        panel.add(new JLabel("Creativity (Temperature):"), gbc);
         gbc.gridx = 1;
-        panel.add(tempSpinner, gbc);
+        panel.add(tempPanel, gbc);
 
         // Key
-        JCheckBox keyCheckBox = new JCheckBox("キーを指定:");
+        JCheckBox keyCheckBox = new JCheckBox("Specify Key:");
         JComboBox<String> keyComboBox = new JComboBox<>(new String[]{
                 "C", "Cm", "C#", "C#m", "D", "Dm", "D#", "D#m", "E", "Em", "F", "Fm",
                 "F#", "F#m", "G", "Gm", "G#", "G#m", "A", "Am", "A#", "A#m", "B", "Bm"
@@ -826,8 +858,8 @@ public class PianoRoll extends JFrame {
             gbc.gridx = 1; panel.add(keyComboBox, gbc);
         }
 
-        // Genre
-        JCheckBox genreCheckBox = new JCheckBox("ジャンルを指定:");
+        // Genre AutoComplete TextFields
+        JCheckBox genreCheckBox = new JCheckBox("Specify Genre(s):");
         String[] genres = {
                 "80s", "90s", "alternative", "ambient", "blues", "celtic", "chillout",
                 "classical", "country", "dance", "drumnbass", "easylistening", "electronic",
@@ -837,39 +869,75 @@ public class PianoRoll extends JFrame {
                 "reggae", "rock", "soundtrack", "swing", "symphonic", "synthpop", "techno",
                 "trance", "world"
         };
-        JComboBox<String> genreComboBox = new JComboBox<>(genres);
-        genreComboBox.setSelectedItem("jazz");
+        JTextField genreField1 = new JTextField(8);
+        JTextField genreField2 = new JTextField(8);
+        genreField1.setText("jazz");
+        setupAutoComplete(genreField1, genres);
+        setupAutoComplete(genreField2, genres);
+
+        JPanel genreInputPanel = new JPanel(new GridLayout(1, 2, 5, 0));
+        genreInputPanel.setOpaque(false);
+        genreInputPanel.add(genreField1);
+        genreInputPanel.add(genreField2);
+
         gbc.gridy = 3;
         if (hasContext) {
             gbc.gridx = 0; panel.add(genreCheckBox, gbc);
-            gbc.gridx = 1; panel.add(genreComboBox, gbc);
-            genreComboBox.setEnabled(false);
-            genreCheckBox.addActionListener(e -> genreComboBox.setEnabled(genreCheckBox.isSelected()));
+            gbc.gridx = 1; panel.add(genreInputPanel, gbc);
+            genreField1.setEnabled(false);
+            genreField2.setEnabled(false);
+            genreCheckBox.addActionListener(e -> {
+                boolean selected = genreCheckBox.isSelected();
+                genreField1.setEnabled(selected);
+                genreField2.setEnabled(selected);
+            });
         } else {
-            gbc.gridx = 0; panel.add(new JLabel("Genre:"), gbc);
-            gbc.gridx = 1; panel.add(genreComboBox, gbc);
+            gbc.gridx = 0; panel.add(new JLabel("Genre(s):"), gbc);
+            gbc.gridx = 1; panel.add(genreInputPanel, gbc);
         }
 
+        // Note Density Slider Setup
+        JPanel densityPanel = new JPanel(new BorderLayout(5, 0));
+        densityPanel.setOpaque(false);
+        JSlider densitySlider = new JSlider(1, 10, 4);
+        JLabel densityValLabel = new JLabel("4");
+        densityValLabel.setPreferredSize(new Dimension(30, 20));
+        densitySlider.addChangeListener(e -> densityValLabel.setText(String.valueOf(densitySlider.getValue())));
+        densityPanel.add(densitySlider, BorderLayout.CENTER);
+        densityPanel.add(densityValLabel, BorderLayout.EAST);
+
         // Note Density
-        JCheckBox densityCheckBox = new JCheckBox("音符密度を指定:");
-        JSpinner densitySpinner = new JSpinner(new SpinnerNumberModel(4, 1, 10, 1));
+        JCheckBox densityCheckBox = new JCheckBox("Specify Note Density:");
         gbc.gridy = 4;
         if (hasContext) {
             gbc.gridx = 0; panel.add(densityCheckBox, gbc);
-            gbc.gridx = 1; panel.add(densitySpinner, gbc);
-            densitySpinner.setEnabled(false);
-            densityCheckBox.addActionListener(e -> densitySpinner.setEnabled(densityCheckBox.isSelected()));
+            gbc.gridx = 1; panel.add(densityPanel, gbc);
+            densitySlider.setEnabled(false);
+            densityValLabel.setEnabled(false);
+            densityCheckBox.addActionListener(e -> {
+                boolean enabled = densityCheckBox.isSelected();
+                densitySlider.setEnabled(enabled);
+                densityValLabel.setEnabled(enabled);
+            });
         } else {
             gbc.gridx = 0; panel.add(new JLabel("Note Density (1-10):"), gbc);
-            gbc.gridx = 1; panel.add(densitySpinner, gbc);
+            gbc.gridx = 1; panel.add(densityPanel, gbc);
         }
 
         // Thinking (CoT)
-        JCheckBox thinkingCheckBox = new JCheckBox("Thinking (CoT)を送信する");
+        JCheckBox thinkingCheckBox = new JCheckBox("Enable CoT (Thinking)");
         thinkingCheckBox.setSelected(true);
         gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 2;
         if (hasContext) {
             panel.add(thinkingCheckBox, gbc);
+        }
+
+        // inst_comp
+        JCheckBox instCompCheckBox = new JCheckBox("Use other tracks as context (inst_comp)");
+        instCompCheckBox.setSelected(false);
+        gbc.gridy = 6; gbc.gridx = 0; gbc.gridwidth = 2;
+        if (hasConditions) {
+            panel.add(instCompCheckBox, gbc);
         }
 
         int optionResult = JOptionPane.showConfirmDialog(this, panel, "Generation Parameters", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -877,14 +945,24 @@ public class PianoRoll extends JFrame {
             return; // User cancelled
         }
 
-        double pValue = (Double) pSpinner.getValue();
-        double tempValue = (Double) tempSpinner.getValue();
+        double pValue = pSlider.getValue() / 100.0;
+        double tempValue = tempSlider.getValue() / 10.0;
 
         // Checkbox values
         boolean sendKey = !hasContext || keyCheckBox.isSelected();
         boolean sendGenre = !hasContext || genreCheckBox.isSelected();
         boolean sendDensity = !hasContext || densityCheckBox.isSelected();
         boolean sendThinking = hasContext && thinkingCheckBox.isSelected();
+        boolean useInstComp = hasConditions && instCompCheckBox.isSelected();
+
+        // Extract and filter non-empty genre text inputs (max 2)
+        List<String> selectedGenres = new ArrayList<>();
+        if (sendGenre) {
+            String g1 = genreField1.getText().trim().toLowerCase();
+            String g2 = genreField2.getText().trim().toLowerCase();
+            if (!g1.isEmpty()) selectedGenres.add(g1);
+            if (!g2.isEmpty()) selectedGenres.add(g2);
+        }
 
         // --- Set up variables for GenerationWorker ---
         generateButton.setEnabled(false);
@@ -897,19 +975,23 @@ public class PianoRoll extends JFrame {
             private final long workerEndTick;
             private final List<Note> wPastNotes;
             private final List<Note> wFutureNotes;
+            private final List<Note> wConditionsNotes;
             private final long wPastStart;
             private final long wFutureStart;
+            private final boolean useInstComp;
 
             public GenerationWorker(ModelInfo model, long startTick, long endTick,
-                                    List<Note> pastNotes, List<Note> futureNotes,
-                                    long pastStart, long futureStart) {
+                                    List<Note> pastNotes, List<Note> futureNotes, List<Note> conditionsNotes,
+                                    long pastStart, long futureStart, boolean useInstComp) {
                 this.model = model;
                 this.workerStartTick = startTick;
                 this.workerEndTick = endTick;
                 this.wPastNotes = pastNotes;
                 this.wFutureNotes = futureNotes;
+                this.wConditionsNotes = conditionsNotes;
                 this.wPastStart = pastStart;
                 this.wFutureStart = futureStart;
+                this.useInstComp = useInstComp;
             }
 
             @Override
@@ -917,12 +999,13 @@ public class PianoRoll extends JFrame {
                 System.out.println("GenerationWorker: doInBackground started.");
                 File tempPastMidiFile = null;
                 File tempFutureMidiFile = null;
+                File tempConditionsMidiFile = null;
                 File tempMetaFile = File.createTempFile("compass-meta-", ".json");
 
                 try {
                     System.out.println("GenerationWorker: Temporary files created.");
 
-                    // 過去コンテキスト保存 (時間軸を0基準に左詰め。テンポはAPIとの整合性のために120BPM固定)
+                    // 過去コンテキスト保存
                     if (!wPastNotes.isEmpty()) {
                         tempPastMidiFile = File.createTempFile("compass-past-", ".mid");
                         List<Note> shiftedPast = new ArrayList<>();
@@ -933,7 +1016,7 @@ public class PianoRoll extends JFrame {
                         System.out.println("GenerationWorker: Saved past context with " + wPastNotes.size() + " notes.");
                     }
 
-                    // 未来コンテキスト保存 (時間軸を0基準に左詰め。テンポはAPIとの整合性のために120BPM固定)
+                    // 未来コンテキスト保存
                     if (!wFutureNotes.isEmpty()) {
                         tempFutureMidiFile = File.createTempFile("compass-future-", ".mid");
                         List<Note> shiftedFuture = new ArrayList<>();
@@ -944,11 +1027,34 @@ public class PianoRoll extends JFrame {
                         System.out.println("GenerationWorker: Saved future context with " + wFutureNotes.size() + " notes.");
                     }
 
+                    // 条件コンテキスト保存
+                    if (useInstComp && !wConditionsNotes.isEmpty()) {
+                        tempConditionsMidiFile = File.createTempFile("compass-conditions-", ".mid");
+                        List<Note> shiftedConditions = new ArrayList<>();
+                        for (Note n : wConditionsNotes) {
+                            shiftedConditions.add(new Note(n.getPitch(), n.getStartTimeTicks() - workerStartTick, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
+                        }
+                        MidiHandler.saveMidiFile(tempConditionsMidiFile, shiftedConditions, pianoRollView.getPpqn(), 120.0f);
+                        System.out.println("GenerationWorker: Saved conditions context with " + wConditionsNotes.size() + " notes.");
+                    }
+
                     // meta_jsonの構築 (テンポはAPIとの整合性のために120BPM固定)
                     String modelType = model.getModelName();
                     int tempoVal = 120;
 
-                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList("PIANO"), tempoVal, "Meta2MIDI");
+                    String targetInst = linkedTrack.getInstrument();
+                    if (!targetInst.equals("PIANO") && !targetInst.equals("SAX")) {
+                        targetInst = "PIANO";
+                    }
+
+                    String taskStr = "Meta2MIDI";
+                    if (useInstComp) {
+                        taskStr = "inst_comp";
+                    } else if (tempPastMidiFile != null && tempFutureMidiFile != null) {
+                        taskStr = "infill";
+                    }
+
+                    GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList(targetInst), tempoVal, taskStr);
                     meta.setP(pValue);
                     meta.setTemperature(tempValue);
 
@@ -956,11 +1062,11 @@ public class PianoRoll extends JFrame {
                         meta.setKey(keyComboBox.getSelectedItem().toString());
                     }
                     if (sendGenre) {
-                        meta.setGenre(Collections.singletonList(genreComboBox.getSelectedItem().toString()));
+                        meta.setGenre(selectedGenres);
                     }
                     if (sendDensity) {
                         Map<String, Integer> densities = new HashMap<>();
-                        densities.put("PIANO", (Integer) densitySpinner.getValue());
+                        densities.put(targetInst, densitySlider.getValue());
                         meta.setGenNoteDense(densities);
                     }
                     if (sendThinking) {
@@ -980,7 +1086,7 @@ public class PianoRoll extends JFrame {
                     System.out.println("GenerationWorker: Meta JSON configuration prepared.");
 
                     System.out.println("GenerationWorker: Calling API client...");
-                    byte[] responseBytes = mozartAPIClient.generate(tempPastMidiFile, tempFutureMidiFile, tempMetaFile);
+                    byte[] responseBytes = mozartAPIClient.generate(tempPastMidiFile, tempFutureMidiFile, tempConditionsMidiFile, tempMetaFile);
                     System.out.println("GenerationWorker: API client response received.");
 
                     byte[] midiBytes;
@@ -1012,6 +1118,7 @@ public class PianoRoll extends JFrame {
                     System.out.println("GenerationWorker: Cleaning up temp files...");
                     if (tempPastMidiFile != null) tempPastMidiFile.delete();
                     if (tempFutureMidiFile != null) tempFutureMidiFile.delete();
+                    if (tempConditionsMidiFile != null) tempConditionsMidiFile.delete();
                     if (tempMetaFile != null) tempMetaFile.delete();
                 }
             }
@@ -1040,7 +1147,7 @@ public class PianoRoll extends JFrame {
             }
         }
 
-        new GenerationWorker(selectedModel, startTick, endTick, pastNotes, futureNotes, pastStart, futureStart).execute();
+        new GenerationWorker(selectedModel, startTick, endTick, pastNotes, futureNotes, conditionsNotes, pastStart, futureStart, useInstComp).execute();
     }
 
     // --- Utility ---
@@ -1053,6 +1160,100 @@ public class PianoRoll extends JFrame {
 
     public PlaybackManager getPlaybackManager() {
         return this.playbackManager;
+    }
+
+    public void updatePlaybackHeadOnly(long tick) {
+        if (pianoRollView != null) {
+            SwingUtilities.invokeLater(() -> pianoRollView.setPlaybackTick(tick));
+        }
+    }
+
+    private void setupAutoComplete(JTextField textField, String[] suggestions) {
+        JPopupMenu popup = new JPopupMenu();
+        JList<String> list = new JList<>();
+        popup.add(new JScrollPane(list));
+        popup.setFocusable(false);
+
+        textField.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                if (popup.isVisible()) {
+                    int selected = list.getSelectedIndex();
+                    int size = list.getModel().getSize();
+                    if (e.getKeyCode() == java.awt.event.KeyEvent.VK_DOWN) {
+                        if (size > 0) {
+                            list.setSelectedIndex((selected + 1) % size);
+                            list.ensureIndexIsVisible(list.getSelectedIndex());
+                        }
+                        e.consume();
+                    } else if (e.getKeyCode() == java.awt.event.KeyEvent.VK_UP) {
+                        if (size > 0) {
+                            list.setSelectedIndex((selected - 1 + size) % size);
+                            list.ensureIndexIsVisible(list.getSelectedIndex());
+                        }
+                        e.consume();
+                    } else if (e.getKeyCode() == java.awt.event.KeyEvent.VK_TAB) {
+                        if (size > 0 && selected != -1) {
+                            textField.setText(list.getSelectedValue());
+                            popup.setVisible(false);
+                        }
+                        e.consume();
+                    } else if (e.getKeyCode() == java.awt.event.KeyEvent.VK_ENTER) {
+                        if (size > 0 && selected != -1) {
+                            textField.setText(list.getSelectedValue());
+                            popup.setVisible(false);
+                        }
+                        e.consume();
+                    }
+                }
+            }
+        });
+
+        textField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            private void update() {
+                SwingUtilities.invokeLater(() -> {
+                    String text = textField.getText().trim().toLowerCase();
+                    if (text.isEmpty()) {
+                        popup.setVisible(false);
+                        return;
+                    }
+                    List<String> filtered = new ArrayList<>();
+                    for (String s : suggestions) {
+                        if (s.toLowerCase().contains(text)) {
+                            filtered.add(s);
+                        }
+                    }
+                    if (filtered.isEmpty()) {
+                        popup.setVisible(false);
+                    } else {
+                        list.setListData(filtered.toArray(new String[0]));
+                        list.setSelectedIndex(0);
+                        
+                        if (!popup.isVisible() && textField.isShowing()) {
+                            popup.show(textField, 0, textField.getHeight());
+                            textField.requestFocusInWindow();
+                        }
+                        popup.pack();
+                    }
+                });
+            }
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { update(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { update(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { update(); }
+        });
+        
+        list.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                if (e.getClickCount() == 1) {
+                    String val = list.getSelectedValue();
+                    if (val != null) {
+                        textField.setText(val);
+                        popup.setVisible(false);
+                    }
+                }
+            }
+        });
     }
 
     // --- Window Closing Logic ---
