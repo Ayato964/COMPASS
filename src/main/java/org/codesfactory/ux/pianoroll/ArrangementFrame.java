@@ -345,26 +345,18 @@ public class ArrangementFrame extends JFrame {
             instCombo.setSelectedItem(track.getInstrument());
             instCombo.addActionListener(e -> track.setInstrument((String) instCombo.getSelectedItem()));
             
-            // 単旋律 (Mono) 設定
-            JCheckBox monoCheck = new JCheckBox("Mono");
-            monoCheck.setSelected(track.isMonophonic());
-            monoCheck.setOpaque(false);
-            monoCheck.addActionListener(e -> track.setMonophonic(monoCheck.isSelected()));
-            
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(2, 4, 2, 4);
             gbc.fill = GridBagConstraints.HORIZONTAL;
             gbc.weightx = 1.0;
             
             gbc.gridx = 0; gbc.gridy = 0;
+            gbc.gridwidth = 2;
             header.add(nameField, gbc);
             
             gbc.gridx = 0; gbc.gridy = 1;
+            gbc.gridwidth = 2;
             header.add(instCombo, gbc);
-            
-            gbc.gridx = 1; gbc.gridy = 1;
-            gbc.weightx = 0.0;
-            header.add(monoCheck, gbc);
             
             JPopupMenu trackPopupMenu = createTrackPopupMenu(track);
 

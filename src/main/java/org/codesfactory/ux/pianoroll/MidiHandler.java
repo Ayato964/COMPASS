@@ -94,6 +94,10 @@ public class MidiHandler {
     }
 
     public static void saveMidiFile(File file, List<Note> notes, int ppqn, float tempo) throws InvalidMidiDataException, IOException {
+        saveMidiFile(file, notes, ppqn, tempo, "PIANO");
+    }
+
+    public static void saveMidiFile(File file, List<Note> notes, int ppqn, float tempo, String instrument) throws InvalidMidiDataException, IOException {
         Sequence sequence = new Sequence(Sequence.PPQ, ppqn);
         javax.sound.midi.Track track = sequence.createTrack();
 
@@ -111,18 +115,32 @@ public class MidiHandler {
             System.err.println("Error creating tempo event: " + e.getMessage());
         }
 
+        // Add Program Change event based on target instrument to align with API validation
+        int program = 0; // Default to Piano
+        if ("SAX".equalsIgnoreCase(instrument)) {
+            program = 65; // Soprano Sax
+        }
+        
+        try {
+            ShortMessage pc = new ShortMessage();
+            pc.setMessage(ShortMessage.PROGRAM_CHANGE, 0, program, 0); // Channel 0, Program
+            track.add(new MidiEvent(pc, 0));
+        } catch (InvalidMidiDataException e) {
+            System.err.println("Error creating program change event: " + e.getMessage());
+        }
+
         for (Note note : notes) {
             try {
                 ShortMessage noteOn = new ShortMessage();
-                noteOn.setMessage(ShortMessage.NOTE_ON, note.getChannel(), note.getPitch(), note.getVelocity());
+                // Ensure everything is on Channel 0 to match Program Change channel
+                noteOn.setMessage(ShortMessage.NOTE_ON, 0, note.getPitch(), note.getVelocity());
                 track.add(new MidiEvent(noteOn, note.getStartTimeTicks()));
 
                 ShortMessage noteOff = new ShortMessage();
-                noteOff.setMessage(ShortMessage.NOTE_OFF, note.getChannel(), note.getPitch(), 0); // Velocity 0 for NOTE_OFF
+                noteOff.setMessage(ShortMessage.NOTE_OFF, 0, note.getPitch(), 0); // Velocity 0 for NOTE_OFF
                 track.add(new MidiEvent(noteOff, note.getStartTimeTicks() + note.getDurationTicks()));
             } catch (InvalidMidiDataException e) {
                 System.err.println("Error creating MIDI message for note: " + note);
-                // Optionally re-throw or handle more gracefully
             }
         }
         MidiSystem.write(sequence, MidiSystem.getMidiFileTypes(sequence)[0], file);

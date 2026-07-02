@@ -11,7 +11,6 @@ public class Track implements Serializable {
     private final String id;
     private String name;
     private String instrument = "PIANO";
-    private boolean isMonophonic = false;
     private java.awt.Color color = new java.awt.Color(78, 59, 120);
     private final List<Note> notes = new ArrayList<>();
     private final List<MidiRegion> regions = new ArrayList<>();
@@ -42,11 +41,7 @@ public class Track implements Serializable {
     }
 
     public boolean isMonophonic() {
-        return isMonophonic;
-    }
-
-    public void setMonophonic(boolean monophonic) {
-        isMonophonic = monophonic;
+        return "SAX".equalsIgnoreCase(instrument) || "VIOLIN".equalsIgnoreCase(instrument) || "BASS".equalsIgnoreCase(instrument);
     }
 
     public List<Note> getNotes() {
@@ -79,7 +74,7 @@ public class Track implements Serializable {
                 "id='" + id + '\'' +
                 ", name='" + name + '\'' +
                 ", instrument='" + instrument + '\'' +
-                ", isMonophonic=" + isMonophonic +
+                ", isMonophonic=" + isMonophonic() +
                 ", notesCount=" + notes.size() +
                 ", regionsCount=" + regions.size() +
                 '}';

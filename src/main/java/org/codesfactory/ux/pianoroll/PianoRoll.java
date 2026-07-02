@@ -1005,6 +1005,8 @@ public class PianoRoll extends JFrame {
                 try {
                     System.out.println("GenerationWorker: Temporary files created.");
 
+                    String targetInst = linkedTrack.isMonophonic() ? "SAX" : "PIANO";
+
                     // 過去コンテキスト保存
                     if (!wPastNotes.isEmpty()) {
                         tempPastMidiFile = File.createTempFile("compass-past-", ".mid");
@@ -1012,7 +1014,7 @@ public class PianoRoll extends JFrame {
                         for (Note n : wPastNotes) {
                             shiftedPast.add(new Note(n.getPitch(), n.getStartTimeTicks() - wPastStart, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
                         }
-                        MidiHandler.saveMidiFile(tempPastMidiFile, shiftedPast, pianoRollView.getPpqn(), 120.0f);
+                        MidiHandler.saveMidiFile(tempPastMidiFile, shiftedPast, pianoRollView.getPpqn(), 120.0f, targetInst);
                         System.out.println("GenerationWorker: Saved past context with " + wPastNotes.size() + " notes.");
                     }
 
@@ -1023,7 +1025,7 @@ public class PianoRoll extends JFrame {
                         for (Note n : wFutureNotes) {
                             shiftedFuture.add(new Note(n.getPitch(), n.getStartTimeTicks() - wFutureStart, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
                         }
-                        MidiHandler.saveMidiFile(tempFutureMidiFile, shiftedFuture, pianoRollView.getPpqn(), 120.0f);
+                        MidiHandler.saveMidiFile(tempFutureMidiFile, shiftedFuture, pianoRollView.getPpqn(), 120.0f, targetInst);
                         System.out.println("GenerationWorker: Saved future context with " + wFutureNotes.size() + " notes.");
                     }
 
@@ -1034,18 +1036,13 @@ public class PianoRoll extends JFrame {
                         for (Note n : wConditionsNotes) {
                             shiftedConditions.add(new Note(n.getPitch(), n.getStartTimeTicks() - workerStartTick, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
                         }
-                        MidiHandler.saveMidiFile(tempConditionsMidiFile, shiftedConditions, pianoRollView.getPpqn(), 120.0f);
+                        MidiHandler.saveMidiFile(tempConditionsMidiFile, shiftedConditions, pianoRollView.getPpqn(), 120.0f, targetInst);
                         System.out.println("GenerationWorker: Saved conditions context with " + wConditionsNotes.size() + " notes.");
                     }
 
                     // meta_jsonの構築 (テンポはAPIとの整合性のために120BPM固定)
                     String modelType = model.getModelName();
                     int tempoVal = 120;
-
-                    String targetInst = linkedTrack.getInstrument();
-                    if (!targetInst.equals("PIANO") && !targetInst.equals("SAX")) {
-                        targetInst = "PIANO";
-                    }
 
                     String taskStr = "Meta2MIDI";
                     if (useInstComp) {
