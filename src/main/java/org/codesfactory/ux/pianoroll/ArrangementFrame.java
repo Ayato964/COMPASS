@@ -63,6 +63,7 @@ public class ArrangementFrame extends JFrame {
         toolBar.setFloatable(false);
         toolBar.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         
+        JButton newProjectButton = new JButton("📄 New Project");
         JButton loadMidiButton = new JButton("📁 Load MIDI");
         JButton playButton = new JButton("▶ Play");
         JButton pauseButton = new JButton("⏸ Pause");
@@ -74,6 +75,7 @@ public class ArrangementFrame extends JFrame {
         bpmField = new JTextField("120.0", 4);
         quantizeComboBox = new JComboBox<>(new String[]{"1 Measure", "1/2", "1/4", "1/8", "1/16"});
         
+        toolBar.add(newProjectButton);
         toolBar.add(loadMidiButton);
         toolBar.addSeparator();
         toolBar.add(playButton);
@@ -126,6 +128,7 @@ public class ArrangementFrame extends JFrame {
         rebuildTrackHeaders();
         
         // イベントハンドラ
+        newProjectButton.addActionListener(e -> createNewProject());
         loadMidiButton.addActionListener(e -> loadMidiFile());
         playButton.addActionListener(e -> startPlayback());
         pauseButton.addActionListener(e -> pausePlayback());
@@ -1469,6 +1472,124 @@ public class ArrangementFrame extends JFrame {
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private boolean isProjectModified() {
+        if (!undoStack.isEmpty()) {
+            return true;
+        }
+        if (tracks.size() > 1) {
+            return true;
+        }
+        if (!tracks.isEmpty()) {
+            Track firstTrack = tracks.get(0);
+            if (!firstTrack.getNotes().isEmpty() || !firstTrack.getRegions().isEmpty()) {
+                return true;
+            }
+            if (!"Track 1".equals(firstTrack.getName())) {
+                return true;
+            }
+        }
+        try {
+            float bpm = Float.parseFloat(bpmField.getText());
+            if (Math.abs(bpm - 120.0f) > 0.001) {
+                return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    public double getBpm() {
+        try {
+            return Double.parseDouble(bpmField.getText());
+        } catch (NumberFormatException e) {
+            return 120.0;
+        }
+    }
+
+    private void createNewProject() {
+        if (isProjectModified()) {
+            int option = JOptionPane.showConfirmDialog(
+                this,
+                "すでに何か作業をしています。保存しますか？",
+                "新規プロジェクト",
+                JOptionPane.YES_NO_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE
+            );
+            if (option == JOptionPane.YES_OPTION) {
+                boolean saved = saveProjectMidiFile();
+                if (!saved) {
+                    return;
+                }
+            } else if (option == JOptionPane.CANCEL_OPTION || option == JOptionPane.CLOSED_OPTION) {
+                return;
+            }
+        }
+        
+        closeAllActivePianoRolls();
+        resetProject();
+    }
+
+    private boolean saveProjectMidiFile() {
+        if (playbackManager.isPlaying()) playbackManager.stop();
+        
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("MIDI Files", "mid", "midi"));
+        
+        if (fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File file = fileChooser.getSelectedFile();
+            String path = file.getAbsolutePath();
+            if (!path.toLowerCase().endsWith(".mid") && !path.toLowerCase().endsWith(".midi")) {
+                file = new File(path + ".mid");
+            }
+            try {
+                float bpm = 120.0f;
+                try {
+                    bpm = Float.parseFloat(bpmField.getText());
+                } catch (NumberFormatException ignored) {}
+                
+                MidiHandler.saveMidiTracks(file, tracks, ppqn, bpm);
+                setTitle("COMPASS - Arrangement View");
+                return true;
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Error saving MIDI: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        }
+        return false;
+    }
+
+    private void closeAllActivePianoRolls() {
+        List<PianoRoll> rolls = new ArrayList<>(activePianoRolls);
+        for (PianoRoll pr : rolls) {
+            pr.dispose();
+        }
+        activePianoRolls.clear();
+    }
+
+    private void resetProject() {
+        tracks.clear();
+        selectedTracks.clear();
+        undoStack.clear();
+        
+        Track defaultTrack = new Track("Track 1");
+        tracks.add(defaultTrack);
+        selectedTrack = defaultTrack;
+        selectedTracks.add(defaultTrack);
+        
+        bpmField.setText("120.0");
+        quantizeComboBox.setSelectedIndex(2); // "1/4" default
+        
+        if (playbackManager.getSequencer() != null) {
+            playbackManager.setTickPosition(0);
+        }
+        
+        setTitle("COMPASS - Arrangement View");
+        
+        rebuildTrackHeaders();
+        timelinePanel.recalculateSize();
+        scrollPane.revalidate();
+        scrollPane.repaint();
     }
 
     public static void main(String[] args) {

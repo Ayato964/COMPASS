@@ -145,10 +145,9 @@ public class PianoRoll extends JFrame {
         loopStartField.setText(String.valueOf(startMeasure));
         loopEndField.setText(String.valueOf(endMeasure));
 
-        // Enforce loop range & position
+        // Set visible tick range and position
         pianoRollView.setLoopRange(region.getStartTick(), region.getEndTick());
         pianoRollView.setVisibleTickRange(region.getStartTick(), region.getEndTick());
-        playbackManager.setLoop(region.getStartTick(), region.getEndTick());
         playbackManager.setTickPosition(region.getStartTick());
 
         // Final setup
@@ -260,15 +259,13 @@ public class PianoRoll extends JFrame {
         // --- Left Group (Playback Controls & Zoom) ---
         loopButton = new JButton("🔁");
         loopButton.setFont(iconFont);
-        loopButton.setToolTipText("Toggle Loop");
+        loopButton.setToolTipText("Toggle Selection Range");
         loopButton.setFocusPainted(false);
         loopButton.addActionListener(e -> {
             if (pianoRollView.isLoopRangeVisible()) {
                 pianoRollView.clearLoopRange();
-                playbackManager.clearLoop();
             } else {
                 pianoRollView.setLoopRange(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
-                playbackManager.setLoop(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
             }
             updateLoopButtonText();
         });
@@ -376,20 +373,20 @@ public class PianoRoll extends JFrame {
         toolBar.add(Box.createHorizontalStrut(3));
         loopStartField = new JTextField(2);
         loopStartField.setMaximumSize(new Dimension(30, 24));
-        loopStartField.setToolTipText("Start Measure (Press Enter to set loop)");
+        loopStartField.setToolTipText("Start Measure (Press Enter to set range)");
         loopStartField.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(loopStartField);
 
         toolBar.add(new JLabel("-"));
         loopEndField = new JTextField(2);
         loopEndField.setMaximumSize(new Dimension(30, 24));
-        loopEndField.setToolTipText("End Measure (Press Enter to set loop)");
+        loopEndField.setToolTipText("End Measure (Press Enter to set range)");
         loopEndField.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(loopEndField);
         toolBar.add(Box.createHorizontalStrut(3));
 
         JButton setLoopButton = new JButton("Set");
-        setLoopButton.setToolTipText("Apply new loop range based on measures");
+        setLoopButton.setToolTipText("Apply new range based on measures");
         setLoopButton.addActionListener(e -> updateLoopRangeFromFields());
         toolBar.add(setLoopButton);
 
@@ -485,14 +482,13 @@ public class PianoRoll extends JFrame {
                 return;
             }
 
+            if (parentFrame != null) {
+                playbackManager.setTempo((float) parentFrame.getBpm());
+            }
+
             // Always load the latest notes before playing
             playbackManager.loadNotes(notesForPlayback, pianoRollView.getPpqn());
 
-            if (pianoRollView.isLoopRangeVisible()) {
-                playbackManager.setLoop(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
-            } else {
-                playbackManager.clearLoop();
-            }
             playbackManager.setTickPosition(savedTick);
             playbackManager.play();
         }
@@ -562,10 +558,6 @@ public class PianoRoll extends JFrame {
             long endTick = (long)endMeasure * ticksPerMeasure;
 
             pianoRollView.setLoopRange(startTick, endTick);
-
-            if (pianoRollView.isLoopRangeVisible()) {
-                playbackManager.setLoop(pianoRollView.getLoopStartTick(), pianoRollView.getLoopEndTick());
-            }
             updateLoopButtonText(); // Sync UI
         } catch (NumberFormatException e) {
             JOptionPane.showMessageDialog(this, "Invalid measure value. Please enter numbers only.", "Input Error", JOptionPane.ERROR_MESSAGE);

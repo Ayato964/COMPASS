@@ -75,6 +75,20 @@ public class PlaybackManager {
             sequence = new Sequence(Sequence.PPQ, ppqn);
             javax.sound.midi.Track track = sequence.createTrack();
 
+            // Add tempo event at tick 0 to enforce the current BPM in the sequence itself
+            try {
+                MetaMessage tempoMessage = new MetaMessage();
+                int mspqn = (int)(60000000 / this.currentBpm);
+                byte[] data = new byte[3];
+                data[0] = (byte)((mspqn >> 16) & 0xff);
+                data[1] = (byte)((mspqn >> 8) & 0xff);
+                data[2] = (byte)(mspqn & 0xff);
+                tempoMessage.setMessage(0x51, data, data.length);
+                track.add(new MidiEvent(tempoMessage, 0));
+            } catch (InvalidMidiDataException e) {
+                System.err.println("Error creating tempo event in loadNotes: " + e.getMessage());
+            }
+
             if (notes != null) {
                 for (Note note : notes) {
                     try {
@@ -110,13 +124,7 @@ public class PlaybackManager {
     public void play() {
         if (sequencer != null && sequence != null && !sequencer.isRunning()) {
             System.out.println("PlaybackManager: Starting playback.");
-            long startTick = 0;
-            if (pianoRollView != null) {
-                // ★★★ private な playbackTick の代わりに public なゲッターを使う ★★★
-                startTick = pianoRollView.getPlaybackTick();
-                // ★★★ ここまで修正 ★★★
-            }
-            sequencer.setTickPosition(startTick);
+            long startTick = sequencer.getTickPosition();
             updatePlaybackHead(startTick); // 開始位置を即時反映
 
             sequencer.start();
@@ -235,50 +243,9 @@ public class PlaybackManager {
      */
     // PlaybackManager.java
     public void setLoop(long startTick, long endTick) {
-        if (sequencer != null && sequence != null) {
-            long sequenceLength = sequence.getTickLength();
-            if (sequenceLength <= 0) {
-                System.err.println("PlaybackManager: Cannot set loop, sequence length is not positive: " + sequenceLength);
-                clearLoop();
-                return;
-            }
-
-            // startTick と endTick をシーケンス長内に丸める
-            long validStartTick = Math.max(0, Math.min(startTick, sequenceLength - 1));
-            long validEndTick = Math.max(validStartTick + 1, Math.min(endTick, sequenceLength));
-
-            if (validStartTick < validEndTick) {
-                try {
-                    sequencer.setLoopStartPoint(validStartTick);
-                    sequencer.setLoopEndPoint(validEndTick);
-                    sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
-                    this.isLoopingEnabled = true;
-                    System.out.println("PlaybackManager: Loop set from " + validStartTick + " to " + validEndTick + " (Sequence length: " + sequenceLength + ")");
-                } catch (IllegalArgumentException e) {
-                    System.err.println("PlaybackManager: Failed to set loop points on sequencer: " + e.getMessage() + ". Retrying after delay...");
-                    long finalStart = validStartTick;
-                    long finalEnd = validEndTick;
-                    SwingUtilities.invokeLater(() -> {
-                        try {
-                            if (sequencer != null && sequence != null) {
-                                sequencer.setLoopStartPoint(finalStart);
-                                sequencer.setLoopEndPoint(finalEnd);
-                                sequencer.setLoopCount(Sequencer.LOOP_CONTINUOUSLY);
-                                this.isLoopingEnabled = true;
-                                System.out.println("PlaybackManager: Loop set successfully on retry.");
-                            }
-                        } catch (IllegalArgumentException ex) {
-                            System.err.println("PlaybackManager: Loop retry also failed: " + ex.getMessage());
-                            clearLoop();
-                        }
-                    });
-                }
-            } else {
-                System.err.println("PlaybackManager: Invalid loop points after clamping. start=" + validStartTick + ", end=" + validEndTick);
-                clearLoop();
-            }
-        } else {
-            System.err.println("PlaybackManager: Sequencer or sequence not available for setting loop.");
+        this.isLoopingEnabled = false;
+        if (sequencer != null) {
+            sequencer.setLoopCount(0);
         }
     }
 
@@ -286,10 +253,9 @@ public class PlaybackManager {
      * ループ再生を解除します。
      */
     public void clearLoop() {
+        this.isLoopingEnabled = false;
         if (sequencer != null) {
             sequencer.setLoopCount(0);
-            this.isLoopingEnabled = false; // ★ ループフラグを下ろす
-            System.out.println("PlaybackManager: Loop cleared.");
         }
     }
 

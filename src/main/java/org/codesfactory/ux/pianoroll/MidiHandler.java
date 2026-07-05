@@ -334,4 +334,74 @@ public class MidiHandler {
         }
         return trackList;
     }
+
+    public static void saveMidiTracks(File file, List<Track> tracks, int ppqn, float tempo) throws InvalidMidiDataException, IOException {
+        Sequence sequence = new Sequence(Sequence.PPQ, ppqn);
+        for (int i = 0; i < tracks.size(); i++) {
+            Track appTrack = tracks.get(i);
+            javax.sound.midi.Track midiTrack = sequence.createTrack();
+            
+            try {
+                MetaMessage nameMessage = new MetaMessage();
+                byte[] nameBytes = appTrack.getName().getBytes();
+                nameMessage.setMessage(0x03, nameBytes, nameBytes.length);
+                midiTrack.add(new MidiEvent(nameMessage, 0));
+            } catch (InvalidMidiDataException e) {
+                System.err.println("Error setting track name: " + e.getMessage());
+            }
+
+            if (i == 0) {
+                try {
+                    MetaMessage tempoMessage = new MetaMessage();
+                    int mspqn = (int)(60000000 / tempo);
+                    byte[] data = new byte[3];
+                    data[0] = (byte)((mspqn >> 16) & 0xff);
+                    data[1] = (byte)((mspqn >> 8) & 0xff);
+                    data[2] = (byte)(mspqn & 0xff);
+                    tempoMessage.setMessage(0x51, data, data.length);
+                    midiTrack.add(new MidiEvent(tempoMessage, 0));
+                } catch (InvalidMidiDataException e) {
+                    System.err.println("Error creating tempo event: " + e.getMessage());
+                }
+            }
+            
+            int program = 0; // Default to Piano
+            String instrument = appTrack.getInstrument();
+            if ("SAX".equalsIgnoreCase(instrument)) {
+                program = 65;
+            } else if ("BASS".equalsIgnoreCase(instrument)) {
+                program = 32;
+            } else if ("VIOLIN".equalsIgnoreCase(instrument)) {
+                program = 40;
+            }
+            
+            int channel = i % 16;
+            if (channel == 9) { // Skip rhythm/drums channel in GM
+                channel = (i + 1) % 16;
+            }
+            
+            try {
+                ShortMessage pc = new ShortMessage();
+                pc.setMessage(ShortMessage.PROGRAM_CHANGE, channel, program, 0);
+                midiTrack.add(new MidiEvent(pc, 0));
+            } catch (InvalidMidiDataException e) {
+                System.err.println("Error creating program change event: " + e.getMessage());
+            }
+            
+            for (Note note : appTrack.getNotes()) {
+                try {
+                    ShortMessage noteOn = new ShortMessage();
+                    noteOn.setMessage(ShortMessage.NOTE_ON, channel, note.getPitch(), note.getVelocity());
+                    midiTrack.add(new MidiEvent(noteOn, note.getStartTimeTicks()));
+                    
+                    ShortMessage noteOff = new ShortMessage();
+                    noteOff.setMessage(ShortMessage.NOTE_OFF, channel, note.getPitch(), 0);
+                    midiTrack.add(new MidiEvent(noteOff, note.getStartTimeTicks() + note.getDurationTicks()));
+                } catch (InvalidMidiDataException e) {
+                    System.err.println("Error creating MIDI message for note: " + note);
+                }
+            }
+        }
+        MidiSystem.write(sequence, 1, file);
+    }
 }
