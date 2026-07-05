@@ -41,6 +41,7 @@ public class ArrangementFrame extends JFrame {
     private final java.util.Set<Track> selectedTracks = new java.util.HashSet<>();
     private MidiRegion selectedRegion = null;
     private final java.util.Set<MidiRegion> selectedRegions = new java.util.HashSet<>();
+    private final java.util.Stack<byte[]> undoStack = new java.util.Stack<>();
     
     public ArrangementFrame() {
         setTitle("COMPASS - Arrangement View");
@@ -62,6 +63,7 @@ public class ArrangementFrame extends JFrame {
         toolBar.setFloatable(false);
         toolBar.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
         
+        JButton loadMidiButton = new JButton("📁 Load MIDI");
         JButton playButton = new JButton("▶ Play");
         JButton pauseButton = new JButton("⏸ Pause");
         JButton stopButton = new JButton("■ Stop");
@@ -72,6 +74,8 @@ public class ArrangementFrame extends JFrame {
         bpmField = new JTextField("120.0", 4);
         quantizeComboBox = new JComboBox<>(new String[]{"1 Measure", "1/2", "1/4", "1/8", "1/16"});
         
+        toolBar.add(loadMidiButton);
+        toolBar.addSeparator();
         toolBar.add(playButton);
         toolBar.add(Box.createHorizontalStrut(5));
         toolBar.add(pauseButton);
@@ -122,11 +126,13 @@ public class ArrangementFrame extends JFrame {
         rebuildTrackHeaders();
         
         // イベントハンドラ
+        loadMidiButton.addActionListener(e -> loadMidiFile());
         playButton.addActionListener(e -> startPlayback());
         pauseButton.addActionListener(e -> pausePlayback());
         stopButton.addActionListener(e -> stopPlayback());
         
         addTrackButton.addActionListener(e -> {
+            saveUndoState();
             Track newTrack = new Track("Track " + (tracks.size() + 1));
             tracks.add(newTrack);
             selectedTrack = newTrack;
@@ -140,6 +146,7 @@ public class ArrangementFrame extends JFrame {
         
         deleteTrackButton.addActionListener(e -> {
             if (tracks.size() > selectedTracks.size()) {
+                saveUndoState();
                 tracks.removeAll(selectedTracks);
                 selectedTracks.clear();
                 selectedTrack = tracks.get(tracks.size() - 1);
@@ -166,6 +173,7 @@ public class ArrangementFrame extends JFrame {
             if (playbackManager.getSequencer() != null && playbackManager.getSequencer().isRunning()) {
                 long currentTick = playbackManager.getSequencer().getTickPosition();
                 timelinePanel.repaint();
+                autoScrollToPlayHead(currentTick);
                 for (PianoRoll pr : activePianoRolls) {
                     pr.updatePlaybackHeadOnly(currentTick);
                 }
@@ -199,6 +207,54 @@ public class ArrangementFrame extends JFrame {
             @Override
             public void actionPerformed(ActionEvent e) {
                 deleteSelectedRegion();
+            }
+        });
+
+        mainContent.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_Z, java.awt.event.InputEvent.CTRL_DOWN_MASK), "undo"
+        );
+        mainContent.getActionMap().put("undo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                undo();
+            }
+        });
+
+        mainContent.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_M, 0), "toggleMute"
+        );
+        mainContent.getActionMap().put("toggleMute", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (selectedTrack != null) {
+                    saveUndoState();
+                    selectedTrack.setMuted(!selectedTrack.isMuted());
+                    rebuildTrackHeaders();
+                    if (playbackManager.isPlaying()) {
+                        long currentTick = playbackManager.getSequencer().getTickPosition();
+                        startPlayback();
+                        playbackManager.setTickPosition(currentTick);
+                    }
+                }
+            }
+        });
+
+        mainContent.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_S, 0), "toggleSolo"
+        );
+        mainContent.getActionMap().put("toggleSolo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (selectedTrack != null) {
+                    saveUndoState();
+                    selectedTrack.setSoloed(!selectedTrack.isSoloed());
+                    rebuildTrackHeaders();
+                    if (playbackManager.isPlaying()) {
+                        long currentTick = playbackManager.getSequencer().getTickPosition();
+                        startPlayback();
+                        playbackManager.setTickPosition(currentTick);
+                    }
+                }
             }
         });
 
@@ -249,6 +305,7 @@ public class ArrangementFrame extends JFrame {
         JMenuItem deleteTrackItem = new JMenuItem("Delete Track");
         deleteTrackItem.addActionListener(ev -> {
             if (tracks.size() > selectedTracks.size()) {
+                saveUndoState();
                 tracks.removeAll(selectedTracks);
                 selectedTracks.clear();
                 selectedTrack = tracks.get(tracks.size() - 1);
@@ -276,6 +333,7 @@ public class ArrangementFrame extends JFrame {
         for (java.util.Map.Entry<String, java.awt.Color> entry : colorMap.entrySet()) {
             JMenuItem colorItem = new JMenuItem(entry.getKey());
             colorItem.addActionListener(ev -> {
+                saveUndoState();
                 track.setColor(entry.getValue());
                 rebuildTrackHeaders();
                 timelinePanel.repaint();
@@ -328,14 +386,20 @@ public class ArrangementFrame extends JFrame {
             // トラック名
             JTextField nameField = new JTextField(track.getName(), 8);
             nameField.addActionListener(e -> {
-                track.setName(nameField.getText());
-                timelinePanel.repaint();
+                if (!nameField.getText().equals(track.getName())) {
+                    saveUndoState();
+                    track.setName(nameField.getText());
+                    timelinePanel.repaint();
+                }
             });
             nameField.addFocusListener(new FocusAdapter() {
                 @Override
                 public void focusLost(FocusEvent e) {
-                    track.setName(nameField.getText());
-                    timelinePanel.repaint();
+                    if (!nameField.getText().equals(track.getName())) {
+                        saveUndoState();
+                        track.setName(nameField.getText());
+                        timelinePanel.repaint();
+                    }
                 }
             });
             
@@ -343,20 +407,73 @@ public class ArrangementFrame extends JFrame {
             String[] instruments = {"PIANO", "SAX", "DRUMS", "BASS", "SYNTH", "GUITAR", "VIOLIN"};
             JComboBox<String> instCombo = new JComboBox<>(instruments);
             instCombo.setSelectedItem(track.getInstrument());
-            instCombo.addActionListener(e -> track.setInstrument((String) instCombo.getSelectedItem()));
+            instCombo.addActionListener(e -> {
+                String selected = (String) instCombo.getSelectedItem();
+                if (selected != null && !selected.equals(track.getInstrument())) {
+                    saveUndoState();
+                    track.setInstrument(selected);
+                }
+            });
+
+            // ミュート (M) ボタン
+            JToggleButton muteBtn = new JToggleButton("M");
+            muteBtn.setSelected(track.isMuted());
+            muteBtn.setMargin(new Insets(2, 4, 2, 4));
+            muteBtn.setFocusPainted(false);
+            muteBtn.setFont(new Font("SansSerif", Font.BOLD, 10));
+            muteBtn.setBackground(track.isMuted() ? new Color(180, 50, 50) : null);
+            muteBtn.addActionListener(e -> {
+                saveUndoState();
+                track.setMuted(muteBtn.isSelected());
+                muteBtn.setBackground(track.isMuted() ? new Color(180, 50, 50) : null);
+                if (playbackManager.isPlaying()) {
+                    long currentTick = playbackManager.getSequencer().getTickPosition();
+                    startPlayback();
+                    playbackManager.setTickPosition(currentTick);
+                }
+            });
+
+            // ソロ (S) ボタン
+            JToggleButton soloBtn = new JToggleButton("S");
+            soloBtn.setSelected(track.isSoloed());
+            soloBtn.setMargin(new Insets(2, 4, 2, 4));
+            soloBtn.setFocusPainted(false);
+            soloBtn.setFont(new Font("SansSerif", Font.BOLD, 10));
+            soloBtn.setBackground(track.isSoloed() ? new Color(180, 150, 50) : null);
+            soloBtn.addActionListener(e -> {
+                saveUndoState();
+                track.setSoloed(soloBtn.isSelected());
+                soloBtn.setBackground(track.isSoloed() ? new Color(180, 150, 50) : null);
+                if (playbackManager.isPlaying()) {
+                    long currentTick = playbackManager.getSequencer().getTickPosition();
+                    startPlayback();
+                    playbackManager.setTickPosition(currentTick);
+                }
+            });
             
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(2, 4, 2, 4);
             gbc.fill = GridBagConstraints.HORIZONTAL;
-            gbc.weightx = 1.0;
             
             gbc.gridx = 0; gbc.gridy = 0;
-            gbc.gridwidth = 2;
+            gbc.gridwidth = 3;
+            gbc.weightx = 1.0;
             header.add(nameField, gbc);
             
             gbc.gridx = 0; gbc.gridy = 1;
-            gbc.gridwidth = 2;
+            gbc.gridwidth = 1;
+            gbc.weightx = 1.0;
             header.add(instCombo, gbc);
+
+            gbc.gridx = 1; gbc.gridy = 1;
+            gbc.gridwidth = 1;
+            gbc.weightx = 0.0;
+            header.add(muteBtn, gbc);
+
+            gbc.gridx = 2; gbc.gridy = 1;
+            gbc.gridwidth = 1;
+            gbc.weightx = 0.0;
+            header.add(soloBtn, gbc);
             
             JPopupMenu trackPopupMenu = createTrackPopupMenu(track);
 
@@ -435,12 +552,25 @@ public class ArrangementFrame extends JFrame {
     }
     
     private void startPlayback() {
-        // 全トラックのノートを統合してPlaybackManagerにロード
-        List<Note> allNotes = new ArrayList<>();
-        for (Track track : tracks) {
-            allNotes.addAll(track.getNotes());
+        long savedTick = 0;
+        if (playbackManager.getSequencer() != null) {
+            savedTick = playbackManager.getSequencer().getTickPosition();
         }
-        playbackManager.loadNotes(allNotes, ppqn);
+
+        List<Note> playNotes = new ArrayList<>();
+        boolean anySolo = tracks.stream().anyMatch(Track::isSoloed);
+        for (Track track : tracks) {
+            if (anySolo) {
+                if (track.isSoloed() && !track.isMuted()) {
+                    playNotes.addAll(track.getNotes());
+                }
+            } else {
+                if (!track.isMuted()) {
+                    playNotes.addAll(track.getNotes());
+                }
+            }
+        }
+        playbackManager.loadNotes(playNotes, ppqn);
         
         // テンポを設定
         try {
@@ -450,6 +580,7 @@ public class ArrangementFrame extends JFrame {
             playbackManager.setTempo(120.0f);
         }
         
+        playbackManager.setTickPosition(savedTick);
         playbackManager.play();
     }
     
@@ -471,15 +602,24 @@ public class ArrangementFrame extends JFrame {
         }
     }
     
+    public void setBpmAndSync(double bpm) {
+        bpmField.setText(String.format("%.1f", bpm));
+        playbackManager.setTempo((float) bpm);
+        for (PianoRoll pr : activePianoRolls) {
+            pr.updateTempoAndSync(bpm);
+        }
+    }
+
     private void updateTempo() {
         try {
             float bpm = Float.parseFloat(bpmField.getText());
-            playbackManager.setTempo(bpm);
+            setBpmAndSync(bpm);
         } catch (NumberFormatException ignored) {}
     }
 
     private void deleteSelectedRegion() {
         if (!selectedRegions.isEmpty()) {
+            saveUndoState();
             for (MidiRegion region : selectedRegions) {
                 for (Track t : tracks) {
                     if (t.getRegions().contains(region)) {
@@ -495,6 +635,21 @@ public class ArrangementFrame extends JFrame {
             selectedRegion = null;
             System.out.println("Arrangement: Deleted selected MIDI regions and their notes.");
             timelinePanel.repaint();
+        }
+    }
+
+    private void autoScrollToPlayHead(long currentTick) {
+        int px = (int) (currentTick * zoomX);
+        JViewport viewport = scrollPane.getViewport();
+        Point viewPos = viewport.getViewPosition();
+        int viewWidth = viewport.getWidth();
+        
+        if (px >= viewPos.x + viewWidth || px < viewPos.x) {
+            int newViewX = Math.max(0, px - (int)(viewWidth * 0.1));
+            int maxViewX = timelinePanel.getWidth() - viewWidth;
+            newViewX = Math.max(0, Math.min(newViewX, maxViewX));
+            viewPos.x = newViewX;
+            viewport.setViewPosition(viewPos);
         }
     }
 
@@ -539,6 +694,7 @@ public class ArrangementFrame extends JFrame {
         private boolean isDraggingRegionForMove = false;
         private long dragOffsetTicks = 0;
         private long dragStartTickOffset = 0;
+        private boolean isDraggingRuler = false;
         
         private final MouseAdapter mouseAdapter = new MouseAdapter() {
             private void checkPopup(MouseEvent e) {
@@ -580,6 +736,7 @@ public class ArrangementFrame extends JFrame {
 
                 if (e.getY() < rulerHeight) {
                     // ルーラーをクリックした場合は再生位置の移動
+                    isDraggingRuler = true;
                     long tick = (long) (e.getX() / zoomX);
                     if (playbackManager.getSequencer() != null) {
                         playbackManager.setTickPosition(tick);
@@ -668,6 +825,14 @@ public class ArrangementFrame extends JFrame {
             
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (isDraggingRuler) {
+                    long tick = (long) (e.getX() / zoomX);
+                    if (playbackManager.getSequencer() != null) {
+                        playbackManager.setTickPosition(Math.max(0, tick));
+                    }
+                    timelinePanel.repaint();
+                    return;
+                }
                 if (isDrawingRegion) {
                     dragCurrentPoint = e.getPoint();
                     repaint();
@@ -684,6 +849,7 @@ public class ArrangementFrame extends JFrame {
             
             @Override
             public void mouseReleased(MouseEvent e) {
+                isDraggingRuler = false;
                 if (isDrawingRegion) {
                     isDrawingRegion = false;
                     setCursor(Cursor.getDefaultCursor());
@@ -708,6 +874,7 @@ public class ArrangementFrame extends JFrame {
                             if (startTick < endTick) {
                                 // 既存のリージョンとの重複チェック (重複させない仕様)
                                 if (!hasOverlap(track, startTick, endTick)) {
+                                    saveUndoState();
                                     MidiRegion region = new MidiRegion(startTick, endTick);
                                     track.addRegion(region);
                                     System.out.println("Arrangement: Added MIDI Region to " + track.getName() + " -> " + region);
@@ -727,6 +894,7 @@ public class ArrangementFrame extends JFrame {
                         long newEnd = selectedRegion.getEndTick() + dragOffsetTicks;
                         
                         if (!hasOverlapExcluding(selectedTrack, newStart, newEnd, selectedRegion)) {
+                            saveUndoState();
                             long oldStart = selectedRegion.getStartTick();
                             long oldEnd = selectedRegion.getEndTick();
                             
@@ -760,6 +928,13 @@ public class ArrangementFrame extends JFrame {
                     } else {
                         zoomOut(e.getPoint());
                     }
+                    e.consume();
+                } else if (e.isShiftDown()) {
+                    JViewport viewport = scrollPane.getViewport();
+                    Point pos = viewport.getViewPosition();
+                    int amount = e.getWheelRotation() * 30;
+                    pos.x = Math.max(0, Math.min(pos.x + amount, timelinePanel.getWidth() - viewport.getWidth()));
+                    viewport.setViewPosition(pos);
                     e.consume();
                 }
             });
@@ -984,9 +1159,14 @@ public class ArrangementFrame extends JFrame {
     private void openPianoRoll(Track track, MidiRegion region) {
         System.out.println("Arrangement: Opening Piano Roll for " + track.getName() + " at region " + region);
         
-        PianoRoll pianoRoll = new PianoRoll(track, region, tracks, () -> {
+        PianoRoll pianoRoll = new PianoRoll(track, region, tracks, this, () -> {
             timelinePanel.repaint();
         });
+        
+        try {
+            float bpm = Float.parseFloat(bpmField.getText());
+            pianoRoll.updateTempoAndSync(bpm);
+        } catch (NumberFormatException ignored) {}
         
         activePianoRolls.add(pianoRoll);
         pianoRoll.addWindowListener(new java.awt.event.WindowAdapter() {
@@ -1036,11 +1216,7 @@ public class ArrangementFrame extends JFrame {
             return;
         }
 
-        int confirm = JOptionPane.showConfirmDialog(this, 
-            "Are you sure you want to merge " + selectedRegions.size() + " selected regions? Gaps between them will be kept as blank.",
-            "Merge Regions", JOptionPane.YES_NO_OPTION);
-        if (confirm != JOptionPane.YES_OPTION) return;
-
+        saveUndoState();
         List<MidiRegion> sortedRegions = new ArrayList<>(selectedRegions);
         sortedRegions.sort(java.util.Comparator.comparingLong(MidiRegion::getStartTick));
         
@@ -1095,6 +1271,204 @@ public class ArrangementFrame extends JFrame {
         playbackManager.loadNotes(targetTrack.getNotes(), ppqn);
         
         JOptionPane.showMessageDialog(this, "Regions merged successfully. Gap areas kept as blank.", "Merge Complete", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private List<MidiHandler.MidiTrackInfo> showMidiTrackSelectionDialog(List<MidiHandler.MidiTrackInfo> trackList) {
+        List<MidiHandler.MidiTrackInfo> selected = new ArrayList<>();
+        
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel.add(new JLabel("Select tracks to import:"));
+        panel.add(Box.createVerticalStrut(10));
+        
+        List<JCheckBox> checkBoxes = new ArrayList<>();
+        for (MidiHandler.MidiTrackInfo info : trackList) {
+            JCheckBox cb = new JCheckBox(info.toString());
+            cb.setSelected(true);
+            checkBoxes.add(cb);
+            panel.add(cb);
+        }
+        
+        int result = JOptionPane.showConfirmDialog(
+            this, 
+            new JScrollPane(panel), 
+            "Import MIDI Tracks", 
+            JOptionPane.OK_CANCEL_OPTION, 
+            JOptionPane.PLAIN_MESSAGE
+        );
+        
+        if (result == JOptionPane.OK_OPTION) {
+            for (int i = 0; i < checkBoxes.size(); i++) {
+                if (checkBoxes.get(i).isSelected()) {
+                    selected.add(trackList.get(i));
+                }
+            }
+        }
+        return selected;
+    }
+
+    private void loadMidiFile() {
+        if (playbackManager.isPlaying()) playbackManager.stop();
+        
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("MIDI Files", "mid", "midi"));
+        
+        if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File file = fileChooser.getSelectedFile();
+            try {
+                List<MidiHandler.MidiTrackInfo> trackList = MidiHandler.loadMidiTracks(file);
+                if (trackList.isEmpty()) {
+                    JOptionPane.showMessageDialog(this, "No notes found in the MIDI file.", "File Warning", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                
+                List<MidiHandler.MidiTrackInfo> selectedTrackInfos = new ArrayList<>();
+                if (trackList.size() == 1) {
+                    selectedTrackInfos.add(trackList.get(0));
+                } else {
+                    selectedTrackInfos = showMidiTrackSelectionDialog(trackList);
+                    if (selectedTrackInfos.isEmpty()) return;
+                }
+                
+                setTitle("COMPASS - new project (" + file.getName() + ")");
+                
+                saveUndoState();
+                tracks.clear();
+                selectedTracks.clear();
+                
+                MidiHandler.MidiData midiData = MidiHandler.loadMidiFile(file);
+                
+                for (MidiHandler.MidiTrackInfo info : selectedTrackInfos) {
+                    Track newTrack = new Track(info.name);
+                    
+                    String targetInst = "PIANO";
+                    String gmName = MidiHandler.getGMInstrumentName(info.program);
+                    if (gmName.contains("Sax") || 
+                        gmName.contains("Reed") ||
+                        gmName.contains("Pipe") ||
+                        gmName.contains("Brass") ||
+                        gmName.contains("Strings") ||
+                        gmName.contains("Violin") ||
+                        gmName.contains("Bass")) {
+                        if (gmName.contains("Bass")) {
+                            targetInst = "BASS";
+                        } else if (gmName.contains("Violin") || gmName.contains("Strings")) {
+                            targetInst = "VIOLIN";
+                        } else {
+                            targetInst = "SAX";
+                        }
+                    }
+                    newTrack.setInstrument(targetInst);
+                    
+                    java.awt.Color[] palette = {
+                        new java.awt.Color(78, 59, 120),
+                        new java.awt.Color(168, 50, 50),
+                        new java.awt.Color(50, 94, 168),
+                        new java.awt.Color(50, 168, 82),
+                        new java.awt.Color(168, 160, 50),
+                        new java.awt.Color(168, 101, 50)
+                    };
+                    newTrack.setColor(palette[tracks.size() % palette.length]);
+
+                    newTrack.getNotes().addAll(info.notes);
+                    
+                    if (!info.notes.isEmpty()) {
+                        long minTick = Long.MAX_VALUE;
+                        long maxTick = 0;
+                        for (Note n : info.notes) {
+                            if (n.getStartTimeTicks() < minTick) minTick = n.getStartTimeTicks();
+                            if (n.getStartTimeTicks() + n.getDurationTicks() > maxTick) maxTick = n.getStartTimeTicks() + n.getDurationTicks();
+                        }
+                        
+                        int measureTicks = midiData.ppqn * 4;
+                        long startTick = (minTick / measureTicks) * measureTicks;
+                        long endTick = ((maxTick + measureTicks - 1) / measureTicks) * measureTicks;
+                        if (startTick < endTick) {
+                            MidiRegion region = new MidiRegion(startTick, endTick);
+                            newTrack.addRegion(region);
+                        }
+                    }
+                    
+                    tracks.add(newTrack);
+                }
+                
+                if (!tracks.isEmpty()) {
+                    selectedTrack = tracks.get(0);
+                    selectedTracks.add(selectedTrack);
+                }
+                
+                setBpmAndSync(midiData.tempo);
+                
+                if (selectedTrack != null) {
+                    playbackManager.loadNotes(selectedTrack.getNotes(), midiData.ppqn);
+                }
+                
+                rebuildTrackHeaders();
+                timelinePanel.recalculateSize();
+                scrollPane.revalidate();
+                scrollPane.repaint();
+                
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, "Error loading MIDI: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    private void saveUndoState() {
+        try {
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(baos);
+            oos.writeObject(new ArrayList<>(tracks));
+            oos.close();
+            undoStack.push(baos.toByteArray());
+            if (undoStack.size() > 30) {
+                undoStack.remove(0);
+            }
+            System.out.println("Arrangement: Saved Undo state. Stack size: " + undoStack.size());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void undo() {
+        if (undoStack.isEmpty()) {
+            System.out.println("Arrangement: No undo states available.");
+            return;
+        }
+        try {
+            byte[] state = undoStack.pop();
+            java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(state);
+            java.io.ObjectInputStream ois = new java.io.ObjectInputStream(bais);
+            @SuppressWarnings("unchecked")
+            List<Track> restoredTracks = (List<Track>) ois.readObject();
+            ois.close();
+            
+            tracks.clear();
+            tracks.addAll(restoredTracks);
+            
+            if (!tracks.isEmpty()) {
+                selectedTrack = tracks.get(0);
+                selectedTracks.clear();
+                selectedTracks.add(selectedTrack);
+            } else {
+                selectedTrack = null;
+                selectedTracks.clear();
+            }
+            selectedRegion = null;
+            selectedRegions.clear();
+            
+            rebuildTrackHeaders();
+            timelinePanel.recalculateSize();
+            timelinePanel.repaint();
+            
+            if (selectedTrack != null) {
+                playbackManager.loadNotes(selectedTrack.getNotes(), ppqn);
+            }
+            System.out.println("Arrangement: Undo executed. Stack size left: " + undoStack.size());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public static void main(String[] args) {

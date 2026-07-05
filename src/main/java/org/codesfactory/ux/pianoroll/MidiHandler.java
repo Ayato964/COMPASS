@@ -146,6 +146,56 @@ public class MidiHandler {
         MidiSystem.write(sequence, MidiSystem.getMidiFileTypes(sequence)[0], file);
     }
 
+    public static void saveConditionsMidiFile(File file, List<Note> notes, int ppqn, float tempo) throws InvalidMidiDataException, IOException {
+        Sequence sequence = new Sequence(Sequence.PPQ, ppqn);
+        javax.sound.midi.Track track = sequence.createTrack();
+
+        try {
+            MetaMessage tempoMessage = new MetaMessage();
+            int mspqn = (int)(60000000 / tempo);
+            byte[] data = new byte[3];
+            data[0] = (byte)((mspqn >> 16) & 0xff);
+            data[1] = (byte)((mspqn >> 8) & 0xff);
+            data[2] = (byte)(mspqn & 0xff);
+            tempoMessage.setMessage(0x51, data, data.length);
+            track.add(new MidiEvent(tempoMessage, 0));
+        } catch (InvalidMidiDataException e) {
+            System.err.println("Error creating tempo event: " + e.getMessage());
+        }
+
+        try {
+            ShortMessage pc0 = new ShortMessage();
+            pc0.setMessage(ShortMessage.PROGRAM_CHANGE, 0, 0, 0);
+            track.add(new MidiEvent(pc0, 0));
+            
+            ShortMessage pc1 = new ShortMessage();
+            pc1.setMessage(ShortMessage.PROGRAM_CHANGE, 1, 64, 0);
+            track.add(new MidiEvent(pc1, 0));
+        } catch (InvalidMidiDataException e) {
+            System.err.println("Error creating program change event: " + e.getMessage());
+        }
+
+        for (Note note : notes) {
+            try {
+                int ch = note.getChannel();
+                if (ch != 0 && ch != 1) {
+                    ch = 0;
+                }
+                
+                ShortMessage noteOn = new ShortMessage();
+                noteOn.setMessage(ShortMessage.NOTE_ON, ch, note.getPitch(), note.getVelocity());
+                track.add(new MidiEvent(noteOn, note.getStartTimeTicks()));
+
+                ShortMessage noteOff = new ShortMessage();
+                noteOff.setMessage(ShortMessage.NOTE_OFF, ch, note.getPitch(), 0);
+                track.add(new MidiEvent(noteOff, note.getStartTimeTicks() + note.getDurationTicks()));
+            } catch (InvalidMidiDataException e) {
+                System.err.println("Error creating MIDI message for note: " + note);
+            }
+        }
+        MidiSystem.write(sequence, MidiSystem.getMidiFileTypes(sequence)[0], file);
+    }
+
     public static MidiData loadMidiFromBytes(byte[] midiBytes) throws InvalidMidiDataException, IOException {
         Sequence sequence = MidiSystem.getSequence(new ByteArrayInputStream(midiBytes));
         List<Note> notes = new ArrayList<>();
@@ -194,5 +244,94 @@ public class MidiHandler {
         }
 
         return new MidiData(notes, ppqn, maxTick, tempo);
+    }
+
+    public static class MidiTrackInfo {
+        public int trackIndex;
+        public String name;
+        public int program = 0;
+        public List<Note> notes = new ArrayList<>();
+        
+        public String getInstrumentName() {
+            return getGMInstrumentName(program);
+        }
+
+        @Override
+        public String toString() {
+            return name + " (" + getInstrumentName() + ") [" + notes.size() + " notes]";
+        }
+    }
+
+    public static String getGMInstrumentName(int program) {
+        if (program >= 0 && program <= 7) return "Piano";
+        if (program >= 8 && program <= 15) return "Chromatic Percussion";
+        if (program >= 16 && program <= 23) return "Organ";
+        if (program >= 24 && program <= 31) return "Guitar";
+        if (program >= 32 && program <= 39) return "Bass";
+        if (program >= 40 && program <= 47) return "Strings";
+        if (program >= 48 && program <= 55) return "Ensemble";
+        if (program >= 56 && program <= 63) return "Brass";
+        if (program >= 64 && program <= 71) return "Reed (Sax/Oboe)";
+        if (program >= 72 && program <= 79) return "Pipe (Flute)";
+        if (program >= 80 && program <= 87) return "Synth Lead";
+        if (program >= 88 && program <= 95) return "Synth Pad";
+        if (program >= 96 && program <= 103) return "Synth Effects";
+        if (program >= 104 && program <= 111) return "Ethnic";
+        if (program >= 112 && program <= 119) return "Percussive";
+        if (program >= 120 && program <= 127) return "Sound Effects";
+        return "Unknown";
+    }
+
+    public static List<MidiTrackInfo> loadMidiTracks(File file) throws InvalidMidiDataException, IOException {
+        Sequence sequence = MidiSystem.getSequence(file);
+        List<MidiTrackInfo> trackList = new ArrayList<>();
+        
+        javax.sound.midi.Track[] tracks = sequence.getTracks();
+        for (int t = 0; t < tracks.length; t++) {
+            javax.sound.midi.Track track = tracks[t];
+            MidiTrackInfo info = new MidiTrackInfo();
+            info.trackIndex = t;
+            info.name = "Track " + (t + 1);
+            
+            for (int i = 0; i < track.size(); i++) {
+                MidiEvent event = track.get(i);
+                MidiMessage message = event.getMessage();
+                if (message instanceof MetaMessage) {
+                    MetaMessage mm = (MetaMessage) message;
+                    if (mm.getType() == 0x03) {
+                        byte[] data = mm.getData();
+                        info.name = new String(data).trim();
+                    }
+                } else if (message instanceof ShortMessage) {
+                    ShortMessage sm = (ShortMessage) message;
+                    if (sm.getCommand() == ShortMessage.PROGRAM_CHANGE) {
+                        info.program = sm.getData1();
+                    }
+                }
+            }
+            
+            for (int i = 0; i < track.size(); i++) {
+                MidiEvent event = track.get(i);
+                MidiMessage message = event.getMessage();
+                long tick = event.getTick();
+                if (message instanceof ShortMessage) {
+                    ShortMessage sm = (ShortMessage) message;
+                    if (sm.getCommand() == ShortMessage.NOTE_ON && sm.getData2() > 0) {
+                        int pitch = sm.getData1();
+                        int velocity = sm.getData2();
+                        int channel = sm.getChannel();
+                        long durationTicks = findNoteOffDuration(track, i + 1, channel, pitch, tick);
+                        if (durationTicks > 0) {
+                            info.notes.add(new Note(pitch, tick, durationTicks, velocity, channel));
+                        }
+                    }
+                }
+            }
+            
+            if (!info.notes.isEmpty()) {
+                trackList.add(info);
+            }
+        }
+        return trackList;
     }
 }

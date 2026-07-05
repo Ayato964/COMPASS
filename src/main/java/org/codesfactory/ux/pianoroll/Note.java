@@ -1,6 +1,9 @@
 package org.codesfactory.ux.pianoroll;
 
-public class Note {
+import java.io.Serializable;
+
+public class Note implements Serializable {
+    private static final long serialVersionUID = 1L;
     private int pitch;          // MIDIノート番号 (0-127)
     private long startTimeTicks; // 開始時間 (Tick単位)
     private long durationTicks;  // 音の長さ (Tick単位)

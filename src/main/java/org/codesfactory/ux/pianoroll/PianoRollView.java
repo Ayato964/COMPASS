@@ -65,6 +65,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     private boolean isDrawingOutline = false; // Shift + Drag で外形描画中フラグ
     private final List<Point> outlinePathPoints = new ArrayList<>(); // 外形描画の軌跡
 
+    private boolean isDraggingRuler = false;
     private boolean isMarqueeSelecting = false; // 範囲(マーキー)選択中フラグ
     private Rectangle marqueeRect = null;
     private Point marqueeStartPoint = null;
@@ -580,7 +581,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         return MAX_PITCH - MIN_PITCH + 1;
     }
 
-    private int tickToX(long tick) {
+    public int tickToX(long tick) {
         return KEY_WIDTH + (int) ((tick - minTick) * pixelsPerTick);
     }
 
@@ -1062,6 +1063,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
                 repaint();
             } else if (localX >= KEY_WIDTH && e.getY() < RULER_HEIGHT) {
                 // --- Ruler Area Click Logic ---
+                isDraggingRuler = true;
                 long clickedTick = snapToGrid(xToTick(e.getX()), 4);
 
                 if (e.isControlDown()) { 
@@ -1162,6 +1164,7 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
     public void mouseReleased(MouseEvent e) {
         longPressTimer.stop(); // ボタンが離されたら長押しタイマー停止
         isLongPress = false;   // 長押しフラグもリセット
+        isDraggingRuler = false;
 
         // --- マーキー選択モードの終了処理 ---
         if (isMarqueeSelecting) {
@@ -1351,6 +1354,15 @@ public class PianoRollView extends JPanel implements MouseListener, MouseMotionL
         JScrollPane scrollPane = (JScrollPane) SwingUtilities.getAncestorOfClass(JScrollPane.class, this);
         int offsetX = (scrollPane != null) ? scrollPane.getViewport().getViewPosition().x : 0;
         int localX = e.getX() - offsetX;
+
+        if (isDraggingRuler) {
+            long clickedTick = snapToGrid(xToTick(e.getX()), 4);
+            if (parentFrame != null) {
+                parentFrame.setPlaybackTickPosition(clickedTick);
+            }
+            e.consume();
+            return;
+        }
 
         if (isDrawingOutline) {
             // 外形描画モード

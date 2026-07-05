@@ -50,19 +50,34 @@ public class PianoRoll extends JFrame {
     private JComboBox<ModelInfo> modelComboBox;
     private JButton generateButton;
 
+    // 音楽生成パラメータの共有保存用スタティック変数（直近の設定を保持）
+    private static double lastPValue = 0.95;
+    private static double lastTempValue = 1.0;
+    private static boolean lastSendKey = false;
+    private static String lastSelectedKey = "C";
+    private static boolean lastSendGenre = false;
+    private static List<String> lastSelectedGenres = new ArrayList<>(Collections.singletonList("jazz"));
+    private static boolean lastSendDensity = false;
+    private static int lastDensityValue = 4;
+    private static boolean lastSendThinking = true;
+    private static boolean lastUseInstComp = false;
+    private static String lastSelectedTargetTrackName = ""; // 直近で考慮した他トラック名
+
     private File currentFile = null;
 
     // --- Multi-track Connection Fields ---
     private Track linkedTrack;
     private MidiRegion linkedRegion;
     private List<Track> allTracks;
+    private ArrangementFrame parentFrame;
     private Runnable onCloseCallback;
 
     // --- Constructor for Multi-track Sub-window ---
-    public PianoRoll(Track track, MidiRegion region, List<Track> allTracks, Runnable onCloseCallback) {
+    public PianoRoll(Track track, MidiRegion region, List<Track> allTracks, ArrangementFrame parentFrame, Runnable onCloseCallback) {
         this.linkedTrack = track;
         this.linkedRegion = region;
         this.allTracks = allTracks;
+        this.parentFrame = parentFrame;
         this.onCloseCallback = onCloseCallback;
 
         setTitle("Piano Roll - " + track.getName());
@@ -141,6 +156,32 @@ public class PianoRoll extends JFrame {
         updateLoopButtonText();
         updateTempoField();
         loadModels();
+
+        // Ctrl+G: 直接生成（ダイアログ非表示）
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_G, java.awt.event.InputEvent.CTRL_DOWN_MASK), "generateDirect"
+        );
+        getRootPane().getActionMap().put("generateDirect", new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (generateButton.isEnabled()) {
+                    generateMusic(false);
+                }
+            }
+        });
+
+        // Ctrl+Shift+G: 設定ダイアログを開いて生成
+        getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_G, java.awt.event.InputEvent.CTRL_DOWN_MASK | java.awt.event.InputEvent.SHIFT_DOWN_MASK), "generateWithSettings"
+        );
+        getRootPane().getActionMap().put("generateWithSettings", new AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                if (generateButton.isEnabled()) {
+                    generateMusic(true);
+                }
+            }
+        });
     }
 
     // --- Constructor ---
@@ -294,7 +335,7 @@ public class PianoRoll extends JFrame {
         generateButton.setToolTipText("Generate Music with AI");
         generateButton.setFocusPainted(false);
         generateButton.setEnabled(false);
-        generateButton.addActionListener(e -> generateMusic());
+        generateButton.addActionListener(e -> generateMusic(true));
         toolBar.add(generateButton);
 
         // Right alignment Glue
@@ -433,6 +474,11 @@ public class PianoRoll extends JFrame {
         if (playbackManager.isPlaying()) {
             playbackManager.pause();
         } else {
+            long savedTick = 0;
+            if (playbackManager.getSequencer() != null) {
+                savedTick = playbackManager.getSequencer().getTickPosition();
+            }
+
             List<Note> notesForPlayback = pianoRollView.getAllNotes();
             if (notesForPlayback.isEmpty()) {
                 infoLabel.setText("Add some notes to play.");
@@ -447,6 +493,7 @@ public class PianoRoll extends JFrame {
             } else {
                 playbackManager.clearLoop();
             }
+            playbackManager.setTickPosition(savedTick);
             playbackManager.play();
         }
     }
@@ -630,13 +677,37 @@ public class PianoRoll extends JFrame {
         if (fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
             try {
+                List<MidiHandler.MidiTrackInfo> trackList = MidiHandler.loadMidiTracks(file);
+                if (trackList.isEmpty()) {
+                    JOptionPane.showMessageDialog(this, "No notes found in the MIDI file.", "File Warning", JOptionPane.WARNING_MESSAGE);
+                    return;
+                }
+                
+                MidiHandler.MidiTrackInfo selectedTrackInfo = null;
+                if (trackList.size() == 1) {
+                    selectedTrackInfo = trackList.get(0);
+                } else {
+                    MidiHandler.MidiTrackInfo[] choices = trackList.toArray(new MidiHandler.MidiTrackInfo[0]);
+                    MidiHandler.MidiTrackInfo choice = (MidiHandler.MidiTrackInfo) JOptionPane.showInputDialog(
+                        this,
+                        "Select a track to load into the Piano Roll:",
+                        "Multiple Tracks Detected",
+                        JOptionPane.QUESTION_MESSAGE,
+                        null,
+                        choices,
+                        choices[0]
+                    );
+                    if (choice == null) return; // User cancelled
+                    selectedTrackInfo = choice;
+                }
+
                 MidiHandler.MidiData midiData = MidiHandler.loadMidiFile(file);
-                pianoRollView.loadNotes(midiData.notes, midiData.ppqn, midiData.totalTicks);
+                pianoRollView.loadNotes(selectedTrackInfo.notes, midiData.ppqn, midiData.totalTicks);
                 playbackManager.loadNotes(pianoRollView.getAllNotes(), pianoRollView.getPpqn());
                 playbackManager.setTempo(midiData.tempo);
                 updateTempoField();
                 currentFile = file;
-                setTitle("COMPASS - " + file.getName());
+                setTitle("COMPASS - " + file.getName() + " [" + selectedTrackInfo.name + "]");
             } catch (Exception ex) {
                 JOptionPane.showMessageDialog(this, "Error opening MIDI file: " + ex.getMessage(), "File Error", JOptionPane.ERROR_MESSAGE);
                 ex.printStackTrace();
@@ -731,7 +802,7 @@ public class PianoRoll extends JFrame {
         worker.execute();
     }
 
-    private void generateMusic() {
+    public void generateMusic(boolean showDialog) {
         ModelInfo selectedModel = (ModelInfo) modelComboBox.getSelectedItem();
         if (selectedModel == null || selectedModel.getModelName() == null || selectedModel.getModelName().equals("MAINTENANCE")) {
             JOptionPane.showMessageDialog(this, "有効なAIモデルを選択してください。", "Warning", JOptionPane.WARNING_MESSAGE);
@@ -790,179 +861,297 @@ public class PianoRoll extends JFrame {
         boolean hasFuture = !futureNotes.isEmpty();
         boolean hasContext = hasPast || hasFuture;
 
-        // 他トラックの条件コンテキスト (同じ小節範囲のノート)
-        List<Note> conditionsNotes = new ArrayList<>();
+        // 他トラックの条件コンテキストの候補 (同じ時間範囲にノートが存在するトラック)
+        List<Track> candidateTracks = new ArrayList<>();
         if (allTracks != null) {
             for (Track t : allTracks) {
                 if (t != linkedTrack) {
-                    List<Note> tNotes = t.getNotes().stream()
-                            .filter(n -> n.getStartTimeTicks() >= startTick && n.getStartTimeTicks() < endTick)
-                            .collect(Collectors.toList());
-                    conditionsNotes.addAll(tNotes);
+                    boolean hasNotesInRange = t.getNotes().stream()
+                            .anyMatch(n -> n.getStartTimeTicks() >= startTick && n.getStartTimeTicks() < endTick);
+                    if (hasNotesInRange) {
+                        candidateTracks.add(t);
+                    }
                 }
             }
         }
-        boolean hasConditions = !conditionsNotes.isEmpty();
+        boolean hasConditions = !candidateTracks.isEmpty();
 
-        // --- Parameters Form UI ---
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(4, 4, 4, 4);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
+        // 実際の生成に使うパラメータ変数群（デフォルトは直近の保存値）
+        double pValue = lastPValue;
+        double tempValue = lastTempValue;
+        boolean sendKey = !hasContext || lastSendKey;
+        String selectedKey = lastSelectedKey;
+        boolean sendGenre = !hasContext || lastSendGenre;
+        List<String> selectedGenres = new ArrayList<>(lastSelectedGenres);
+        boolean sendDensity = !hasContext || lastSendDensity;
+        int densityValue = lastDensityValue;
+        boolean sendThinking = hasContext && lastSendThinking;
+        boolean useInstComp = hasConditions && lastUseInstComp;
+        Track targetTrackForConditions = null;
 
-        // p Slider Setup
-        JPanel pPanel = new JPanel(new BorderLayout(5, 0));
-        pPanel.setOpaque(false);
-        JSlider pSlider = new JSlider(0, 100, 95);
-        JLabel pValLabel = new JLabel("0.95");
-        pValLabel.setPreferredSize(new Dimension(30, 20));
-        pSlider.addChangeListener(e -> pValLabel.setText(String.format("%.2f", pSlider.getValue() / 100.0)));
-        pPanel.add(pSlider, BorderLayout.CENTER);
-        pPanel.add(pValLabel, BorderLayout.EAST);
+        if (showDialog) {
+            // --- Parameters Form UI ---
+            JPanel panel = new JPanel(new GridBagLayout());
+            GridBagConstraints gbc = new GridBagConstraints();
+            gbc.insets = new Insets(4, 4, 4, 4);
+            gbc.fill = GridBagConstraints.HORIZONTAL;
 
-        gbc.gridx = 0; gbc.gridy = 0;
-        panel.add(new JLabel("Variety (Diversity):"), gbc);
-        gbc.gridx = 1;
-        panel.add(pPanel, gbc);
+            // p Slider Setup (Diversity)
+            JPanel pPanel = new JPanel(new BorderLayout(5, 0));
+            pPanel.setOpaque(false);
+            JSlider pSlider = new JSlider(0, 100, (int)(pValue * 100));
+            JLabel pValLabel = new JLabel(String.format("%.2f", pValue));
+            pValLabel.setPreferredSize(new Dimension(30, 20));
+            pSlider.addChangeListener(e -> pValLabel.setText(String.format("%.2f", pSlider.getValue() / 100.0)));
+            pPanel.add(pSlider, BorderLayout.CENTER);
+            pPanel.add(pValLabel, BorderLayout.EAST);
 
-        // Temperature (Creativity) Slider Setup
-        JPanel tempPanel = new JPanel(new BorderLayout(5, 0));
-        tempPanel.setOpaque(false);
-        JSlider tempSlider = new JSlider(1, 20, 10);
-        JLabel tempValLabel = new JLabel("1.0");
-        tempValLabel.setPreferredSize(new Dimension(30, 20));
-        tempSlider.addChangeListener(e -> tempValLabel.setText(String.format("%.1f", tempSlider.getValue() / 10.0)));
-        tempPanel.add(tempSlider, BorderLayout.CENTER);
-        tempPanel.add(tempValLabel, BorderLayout.EAST);
+            gbc.gridx = 0; gbc.gridy = 0;
+            panel.add(new JLabel("Variety (Diversity):"), gbc);
+            gbc.gridx = 1;
+            panel.add(pPanel, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 1;
-        panel.add(new JLabel("Creativity (Temperature):"), gbc);
-        gbc.gridx = 1;
-        panel.add(tempPanel, gbc);
+            // Temperature (Creativity) Slider Setup
+            JPanel tempPanel = new JPanel(new BorderLayout(5, 0));
+            tempPanel.setOpaque(false);
+            JSlider tempSlider = new JSlider(1, 20, (int)(tempValue * 10));
+            JLabel tempValLabel = new JLabel(String.format("%.1f", tempValue));
+            tempValLabel.setPreferredSize(new Dimension(30, 20));
+            tempSlider.addChangeListener(e -> tempValLabel.setText(String.format("%.1f", tempSlider.getValue() / 10.0)));
+            tempPanel.add(tempSlider, BorderLayout.CENTER);
+            tempPanel.add(tempValLabel, BorderLayout.EAST);
 
-        // Key
-        JCheckBox keyCheckBox = new JCheckBox("Specify Key:");
-        JComboBox<String> keyComboBox = new JComboBox<>(new String[]{
-                "C", "Cm", "C#", "C#m", "D", "Dm", "D#", "D#m", "E", "Em", "F", "Fm",
-                "F#", "F#m", "G", "Gm", "G#", "G#m", "A", "Am", "A#", "A#m", "B", "Bm"
-        });
-        keyComboBox.setSelectedItem("C");
-        gbc.gridy = 2;
-        if (hasContext) {
-            gbc.gridx = 0; panel.add(keyCheckBox, gbc);
-            gbc.gridx = 1; panel.add(keyComboBox, gbc);
-            keyComboBox.setEnabled(false);
-            keyCheckBox.addActionListener(e -> keyComboBox.setEnabled(keyCheckBox.isSelected()));
-        } else {
-            gbc.gridx = 0; panel.add(new JLabel("Key:"), gbc);
-            gbc.gridx = 1; panel.add(keyComboBox, gbc);
-        }
+            gbc.gridx = 0; gbc.gridy = 1;
+            panel.add(new JLabel("Creativity (Temperature):"), gbc);
+            gbc.gridx = 1;
+            panel.add(tempPanel, gbc);
 
-        // Genre AutoComplete TextFields
-        JCheckBox genreCheckBox = new JCheckBox("Specify Genre(s):");
-        String[] genres = {
-                "80s", "90s", "alternative", "ambient", "blues", "celtic", "chillout",
-                "classical", "country", "dance", "drumnbass", "easylistening", "electronic",
-                "electropop", "experimental", "folk", "funk", "hiphop", "house", "indie",
-                "instrumentalpop", "instrumentalrock", "jazz", "jazzfusion", "latin", "lounge",
-                "metal", "newage", "orchestral", "pop", "popfolk", "poprock", "punkrock",
-                "reggae", "rock", "soundtrack", "swing", "symphonic", "synthpop", "techno",
-                "trance", "world"
-        };
-        JTextField genreField1 = new JTextField(8);
-        JTextField genreField2 = new JTextField(8);
-        genreField1.setText("jazz");
-        setupAutoComplete(genreField1, genres);
-        setupAutoComplete(genreField2, genres);
-
-        JPanel genreInputPanel = new JPanel(new GridLayout(1, 2, 5, 0));
-        genreInputPanel.setOpaque(false);
-        genreInputPanel.add(genreField1);
-        genreInputPanel.add(genreField2);
-
-        gbc.gridy = 3;
-        if (hasContext) {
-            gbc.gridx = 0; panel.add(genreCheckBox, gbc);
-            gbc.gridx = 1; panel.add(genreInputPanel, gbc);
-            genreField1.setEnabled(false);
-            genreField2.setEnabled(false);
-            genreCheckBox.addActionListener(e -> {
-                boolean selected = genreCheckBox.isSelected();
-                genreField1.setEnabled(selected);
-                genreField2.setEnabled(selected);
+            // Key
+            JCheckBox keyCheckBox = new JCheckBox("Specify Key:");
+            keyCheckBox.setSelected(lastSendKey);
+            JComboBox<String> keyComboBox = new JComboBox<>(new String[]{
+                    "C", "Cm", "C#", "C#m", "D", "Dm", "D#", "D#m", "E", "Em", "F", "Fm",
+                    "F#", "F#m", "G", "Gm", "G#", "G#m", "A", "Am", "A#", "A#m", "B", "Bm"
             });
-        } else {
-            gbc.gridx = 0; panel.add(new JLabel("Genre(s):"), gbc);
-            gbc.gridx = 1; panel.add(genreInputPanel, gbc);
-        }
+            keyComboBox.setSelectedItem(selectedKey);
+            gbc.gridy = 2;
+            if (hasContext) {
+                gbc.gridx = 0; panel.add(keyCheckBox, gbc);
+                gbc.gridx = 1; panel.add(keyComboBox, gbc);
+                keyComboBox.setEnabled(lastSendKey);
+                keyCheckBox.addActionListener(e -> keyComboBox.setEnabled(keyCheckBox.isSelected()));
+            } else {
+                gbc.gridx = 0; panel.add(new JLabel("Key:"), gbc);
+                gbc.gridx = 1; panel.add(keyComboBox, gbc);
+            }
 
-        // Note Density Slider Setup
-        JPanel densityPanel = new JPanel(new BorderLayout(5, 0));
-        densityPanel.setOpaque(false);
-        JSlider densitySlider = new JSlider(1, 10, 4);
-        JLabel densityValLabel = new JLabel("4");
-        densityValLabel.setPreferredSize(new Dimension(30, 20));
-        densitySlider.addChangeListener(e -> densityValLabel.setText(String.valueOf(densitySlider.getValue())));
-        densityPanel.add(densitySlider, BorderLayout.CENTER);
-        densityPanel.add(densityValLabel, BorderLayout.EAST);
+            // Genre AutoComplete TextFields
+            JCheckBox genreCheckBox = new JCheckBox("Specify Genre(s):");
+            genreCheckBox.setSelected(lastSendGenre);
+            String[] genres = {
+                    "80s", "90s", "alternative", "ambient", "blues", "celtic", "chillout",
+                    "classical", "country", "dance", "drumnbass", "easylistening", "electronic",
+                    "electropop", "experimental", "folk", "funk", "hiphop", "house", "indie",
+                    "instrumentalpop", "instrumentalrock", "jazz", "jazzfusion", "latin", "lounge",
+                    "metal", "newage", "orchestral", "pop", "popfolk", "poprock", "punkrock",
+                    "reggae", "rock", "soundtrack", "swing", "symphonic", "synthpop", "techno",
+                    "trance", "world"
+            };
+            JTextField genreField1 = new JTextField(8);
+            JTextField genreField2 = new JTextField(8);
+            if (selectedGenres.size() > 0) genreField1.setText(selectedGenres.get(0));
+            if (selectedGenres.size() > 1) genreField2.setText(selectedGenres.get(1));
+            setupAutoComplete(genreField1, genres);
+            setupAutoComplete(genreField2, genres);
 
-        // Note Density
-        JCheckBox densityCheckBox = new JCheckBox("Specify Note Density:");
-        gbc.gridy = 4;
-        if (hasContext) {
-            gbc.gridx = 0; panel.add(densityCheckBox, gbc);
-            gbc.gridx = 1; panel.add(densityPanel, gbc);
-            densitySlider.setEnabled(false);
-            densityValLabel.setEnabled(false);
-            densityCheckBox.addActionListener(e -> {
-                boolean enabled = densityCheckBox.isSelected();
-                densitySlider.setEnabled(enabled);
-                densityValLabel.setEnabled(enabled);
+            JPanel genreInputPanel = new JPanel(new GridLayout(1, 2, 5, 0));
+            genreInputPanel.setOpaque(false);
+            genreInputPanel.add(genreField1);
+            genreInputPanel.add(genreField2);
+
+            gbc.gridy = 3;
+            if (hasContext) {
+                gbc.gridx = 0; panel.add(genreCheckBox, gbc);
+                gbc.gridx = 1; panel.add(genreInputPanel, gbc);
+                genreField1.setEnabled(lastSendGenre);
+                genreField2.setEnabled(lastSendGenre);
+                genreCheckBox.addActionListener(e -> {
+                    boolean selected = genreCheckBox.isSelected();
+                    genreField1.setEnabled(selected);
+                    genreField2.setEnabled(selected);
+                });
+            } else {
+                gbc.gridx = 0; panel.add(new JLabel("Genre(s):"), gbc);
+                gbc.gridx = 1; panel.add(genreInputPanel, gbc);
+            }
+
+            // Note Density Slider Setup
+            JPanel densityPanel = new JPanel(new BorderLayout(5, 0));
+            densityPanel.setOpaque(false);
+            JSlider densitySlider = new JSlider(1, 10, densityValue);
+            JLabel densityValLabel = new JLabel(String.valueOf(densityValue));
+            densityValLabel.setPreferredSize(new Dimension(30, 20));
+            densitySlider.addChangeListener(e -> densityValLabel.setText(String.valueOf(densitySlider.getValue())));
+            densityPanel.add(densitySlider, BorderLayout.CENTER);
+            densityPanel.add(densityValLabel, BorderLayout.EAST);
+
+            // Note Density
+            JCheckBox densityCheckBox = new JCheckBox("Specify Note Density:");
+            densityCheckBox.setSelected(lastSendDensity);
+            gbc.gridy = 4;
+            if (hasContext) {
+                gbc.gridx = 0; panel.add(densityCheckBox, gbc);
+                gbc.gridx = 1; panel.add(densityPanel, gbc);
+                densitySlider.setEnabled(lastSendDensity);
+                densityValLabel.setEnabled(lastSendDensity);
+                densityCheckBox.addActionListener(e -> {
+                    boolean enabled = densityCheckBox.isSelected();
+                    densitySlider.setEnabled(enabled);
+                    densityValLabel.setEnabled(enabled);
+                });
+            } else {
+                gbc.gridx = 0; panel.add(new JLabel("Note Density (1-10):"), gbc);
+                gbc.gridx = 1; panel.add(densityPanel, gbc);
+            }
+
+            // Thinking (CoT)
+            JCheckBox thinkingCheckBox = new JCheckBox("Enable CoT (Thinking)");
+            thinkingCheckBox.setSelected(lastSendThinking);
+            gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 2;
+            if (hasContext) {
+                panel.add(thinkingCheckBox, gbc);
+            }
+
+            // inst_comp
+            JCheckBox instCompCheckBox = new JCheckBox("Consider other tracks (inst_comp)");
+            instCompCheckBox.setSelected(lastUseInstComp);
+            gbc.gridy = 6; gbc.gridx = 0; gbc.gridwidth = 2;
+
+            JPanel tracksPanel = new JPanel();
+            tracksPanel.setLayout(new BoxLayout(tracksPanel, BoxLayout.Y_AXIS));
+            tracksPanel.setOpaque(false);
+            tracksPanel.setBorder(BorderFactory.createEmptyBorder(5, 25, 5, 5));
+
+            ButtonGroup group = new ButtonGroup();
+            List<JRadioButton> trackRadioButtons = new ArrayList<>();
+            for (Track t : candidateTracks) {
+                JRadioButton tRb = new JRadioButton(t.getName() + " (" + t.getInstrument() + ")");
+                boolean shouldSelect = false;
+                if (!lastSelectedTargetTrackName.isEmpty()) {
+                    shouldSelect = t.getName().equals(lastSelectedTargetTrackName);
+                }
+                if (!shouldSelect && trackRadioButtons.isEmpty()) {
+                    shouldSelect = true;
+                }
+                tRb.setSelected(shouldSelect);
+                tRb.setEnabled(lastUseInstComp);
+                tRb.setOpaque(false);
+                group.add(tRb);
+                trackRadioButtons.add(tRb);
+                tracksPanel.add(tRb);
+            }
+
+            instCompCheckBox.addActionListener(e -> {
+                boolean enabled = instCompCheckBox.isSelected();
+                for (JRadioButton tRb : trackRadioButtons) {
+                    tRb.setEnabled(enabled);
+                }
             });
+
+            if (hasConditions) {
+                panel.add(instCompCheckBox, gbc);
+                gbc.gridy = 7;
+                panel.add(tracksPanel, gbc);
+            }
+
+            int optionResult = JOptionPane.showConfirmDialog(this, panel, "Generation Parameters", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+            if (optionResult != JOptionPane.OK_OPTION) {
+                return; // User cancelled
+            }
+
+            // UIから値を取得
+            pValue = pSlider.getValue() / 100.0;
+            tempValue = tempSlider.getValue() / 10.0;
+            sendKey = !hasContext || keyCheckBox.isSelected();
+            selectedKey = (String) keyComboBox.getSelectedItem();
+            sendGenre = !hasContext || genreCheckBox.isSelected();
+            
+            selectedGenres.clear();
+            if (sendGenre) {
+                String g1 = genreField1.getText().trim().toLowerCase();
+                String g2 = genreField2.getText().trim().toLowerCase();
+                if (!g1.isEmpty()) selectedGenres.add(g1);
+                if (!g2.isEmpty()) selectedGenres.add(g2);
+            }
+            
+            sendDensity = !hasContext || densityCheckBox.isSelected();
+            densityValue = densitySlider.getValue();
+            sendThinking = hasContext && thinkingCheckBox.isSelected();
+            useInstComp = hasConditions && instCompCheckBox.isSelected();
+
+            if (useInstComp) {
+                for (int i = 0; i < candidateTracks.size(); i++) {
+                    if (trackRadioButtons.get(i).isSelected()) {
+                        targetTrackForConditions = candidateTracks.get(i);
+                        break;
+                    }
+                }
+            }
+
+            // 保存
+            lastPValue = pValue;
+            lastTempValue = tempValue;
+            lastSendKey = sendKey;
+            lastSelectedKey = selectedKey;
+            lastSendGenre = sendGenre;
+            lastSelectedGenres = new ArrayList<>(selectedGenres);
+            lastSendDensity = sendDensity;
+            lastDensityValue = densityValue;
+            lastSendThinking = sendThinking;
+            lastUseInstComp = useInstComp;
+            if (targetTrackForConditions != null) {
+                lastSelectedTargetTrackName = targetTrackForConditions.getName();
+            } else {
+                lastSelectedTargetTrackName = "";
+            }
         } else {
-            gbc.gridx = 0; panel.add(new JLabel("Note Density (1-10):"), gbc);
-            gbc.gridx = 1; panel.add(densityPanel, gbc);
+            // ダイアログを表示しない場合は保存された last*** から復元
+            if (useInstComp) {
+                for (Track t : candidateTracks) {
+                    if (t.getName().equals(lastSelectedTargetTrackName)) {
+                        targetTrackForConditions = t;
+                        break;
+                    }
+                }
+                if (targetTrackForConditions == null && !candidateTracks.isEmpty()) {
+                    targetTrackForConditions = candidateTracks.get(0);
+                    lastSelectedTargetTrackName = targetTrackForConditions.getName();
+                }
+            }
         }
 
-        // Thinking (CoT)
-        JCheckBox thinkingCheckBox = new JCheckBox("Enable CoT (Thinking)");
-        thinkingCheckBox.setSelected(true);
-        gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 2;
-        if (hasContext) {
-            panel.add(thinkingCheckBox, gbc);
+        // conditionsNotes の最終抽出
+        List<Note> conditionsNotes = new ArrayList<>();
+        if (useInstComp && targetTrackForConditions != null) {
+            int mappedChannel = targetTrackForConditions.isMonophonic() ? 1 : 0;
+            List<Note> tNotes = targetTrackForConditions.getNotes().stream()
+                    .filter(n -> n.getStartTimeTicks() >= startTick && n.getStartTimeTicks() < endTick)
+                    .map(n -> new Note(n.getPitch(), n.getStartTimeTicks(), n.getDurationTicks(), n.getVelocity(), mappedChannel))
+                    .collect(Collectors.toList());
+            conditionsNotes.addAll(tNotes);
         }
 
-        // inst_comp
-        JCheckBox instCompCheckBox = new JCheckBox("Use other tracks as context (inst_comp)");
-        instCompCheckBox.setSelected(false);
-        gbc.gridy = 6; gbc.gridx = 0; gbc.gridwidth = 2;
-        if (hasConditions) {
-            panel.add(instCompCheckBox, gbc);
-        }
 
-        int optionResult = JOptionPane.showConfirmDialog(this, panel, "Generation Parameters", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (optionResult != JOptionPane.OK_OPTION) {
-            return; // User cancelled
-        }
 
-        double pValue = pSlider.getValue() / 100.0;
-        double tempValue = tempSlider.getValue() / 10.0;
-
-        // Checkbox values
-        boolean sendKey = !hasContext || keyCheckBox.isSelected();
-        boolean sendGenre = !hasContext || genreCheckBox.isSelected();
-        boolean sendDensity = !hasContext || densityCheckBox.isSelected();
-        boolean sendThinking = hasContext && thinkingCheckBox.isSelected();
-        boolean useInstComp = hasConditions && instCompCheckBox.isSelected();
-
-        // Extract and filter non-empty genre text inputs (max 2)
-        List<String> selectedGenres = new ArrayList<>();
-        if (sendGenre) {
-            String g1 = genreField1.getText().trim().toLowerCase();
-            String g2 = genreField2.getText().trim().toLowerCase();
-            if (!g1.isEmpty()) selectedGenres.add(g1);
-            if (!g2.isEmpty()) selectedGenres.add(g2);
-        }
+        final double finalPValue = pValue;
+        final double finalTempValue = tempValue;
+        final boolean finalSendKey = sendKey;
+        final String finalSelectedKey = selectedKey;
+        final boolean finalSendGenre = sendGenre;
+        final List<String> finalSelectedGenres = selectedGenres;
+        final boolean finalSendDensity = sendDensity;
+        final int finalDensityValue = densityValue;
+        final boolean finalSendThinking = sendThinking;
 
         // --- Set up variables for GenerationWorker ---
         generateButton.setEnabled(false);
@@ -1036,7 +1225,7 @@ public class PianoRoll extends JFrame {
                         for (Note n : wConditionsNotes) {
                             shiftedConditions.add(new Note(n.getPitch(), n.getStartTimeTicks() - workerStartTick, n.getDurationTicks(), n.getVelocity(), n.getChannel()));
                         }
-                        MidiHandler.saveMidiFile(tempConditionsMidiFile, shiftedConditions, pianoRollView.getPpqn(), 120.0f, targetInst);
+                        MidiHandler.saveConditionsMidiFile(tempConditionsMidiFile, shiftedConditions, pianoRollView.getPpqn(), 120.0f);
                         System.out.println("GenerationWorker: Saved conditions context with " + wConditionsNotes.size() + " notes.");
                     }
 
@@ -1052,21 +1241,21 @@ public class PianoRoll extends JFrame {
                     }
 
                     GenerateMeta meta = new GenerateMeta(modelType, Collections.singletonList(targetInst), tempoVal, taskStr);
-                    meta.setP(pValue);
-                    meta.setTemperature(tempValue);
+                    meta.setP(finalPValue);
+                    meta.setTemperature(finalTempValue);
 
-                    if (sendKey) {
-                        meta.setKey(keyComboBox.getSelectedItem().toString());
+                    if (finalSendKey) {
+                        meta.setKey(finalSelectedKey);
                     }
-                    if (sendGenre) {
-                        meta.setGenre(selectedGenres);
+                    if (finalSendGenre) {
+                        meta.setGenre(finalSelectedGenres);
                     }
-                    if (sendDensity) {
+                    if (finalSendDensity) {
                         Map<String, Integer> densities = new HashMap<>();
-                        densities.put(targetInst, densitySlider.getValue());
+                        densities.put(targetInst, finalDensityValue);
                         meta.setGenNoteDense(densities);
                     }
-                    if (sendThinking) {
+                    if (finalSendThinking) {
                         meta.setThinking(true);
                     }
 
@@ -1161,7 +1350,32 @@ public class PianoRoll extends JFrame {
 
     public void updatePlaybackHeadOnly(long tick) {
         if (pianoRollView != null) {
-            SwingUtilities.invokeLater(() -> pianoRollView.setPlaybackTick(tick));
+            SwingUtilities.invokeLater(() -> {
+                pianoRollView.setPlaybackTick(tick);
+                autoScrollToPlayHead(tick);
+            });
+        }
+    }
+
+    public void updateTempoAndSync(double bpm) {
+        if (playbackManager != null) {
+            playbackManager.setTempo((float) bpm);
+        }
+    }
+
+    private void autoScrollToPlayHead(long tick) {
+        if (pianoRollView == null || scrollPane == null) return;
+        int px = pianoRollView.tickToX(tick);
+        JViewport viewport = scrollPane.getViewport();
+        Point viewPos = viewport.getViewPosition();
+        int viewWidth = viewport.getWidth();
+        
+        if (px >= viewPos.x + viewWidth || px < viewPos.x) {
+            int newViewX = Math.max(0, px - (int)(viewWidth * 0.1));
+            int maxViewX = pianoRollView.getWidth() - viewWidth;
+            newViewX = Math.max(0, Math.min(newViewX, maxViewX));
+            viewPos.x = newViewX;
+            viewport.setViewPosition(viewPos);
         }
     }
 

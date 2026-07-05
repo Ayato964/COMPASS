@@ -14,6 +14,8 @@ public class Track implements Serializable {
     private java.awt.Color color = new java.awt.Color(78, 59, 120);
     private final List<Note> notes = new ArrayList<>();
     private final List<MidiRegion> regions = new ArrayList<>();
+    private boolean isMuted = false;
+    private boolean isSoloed = false;
 
     public Track(String name) {
         this.id = UUID.randomUUID().toString();
@@ -66,6 +68,22 @@ public class Track implements Serializable {
 
     public void setColor(java.awt.Color color) {
         this.color = color;
+    }
+
+    public boolean isMuted() {
+        return isMuted;
+    }
+
+    public void setMuted(boolean muted) {
+        this.isMuted = muted;
+    }
+
+    public boolean isSoloed() {
+        return isSoloed;
+    }
+
+    public void setSoloed(boolean soloed) {
+        this.isSoloed = soloed;
     }
 
     @Override
